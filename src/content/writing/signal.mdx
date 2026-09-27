@@ -1,8 +1,8 @@
 ---
 title: "Signal: a render pipeline eating itself"
-description: "How the glitching sculpture at the top of this site is made, one shader pass at a time."
+description: "How the glitching sculpture at the top of this site is made: a gyroid, a superformula bloom, and two shader passes."
 date: 2026-09-27
-tags: ["WebGL", "Raymarching", "Glitch"]
+tags: ["WebGL", "Raymarching", "Superformula"]
 ---
 
 The piece at the top of the home page is not a video. It is two fragment shaders running in your
@@ -35,6 +35,34 @@ float map(vec3 p){
 Shading is reflection-only: the reflected ray samples a procedural studio of two strip softboxes
 and two coloured kicker lights. A thin-film term tints the reflections by view angle, which is
 where the oil-slick colours come from.
+
+## The second form: a superformula bloom
+
+Every twenty-odd seconds, a burst carries the lattice into a flower. The flower is a **3D
+superformula**, Johan Gielis's 2003 generalisation of the superellipse. One curve,
+
+$$
+r(\varphi) = \left( \left|\cos\tfrac{m\varphi}{4}\right|^{n_2} + \left|\sin\tfrac{m\varphi}{4}\right|^{n_3} \right)^{-1/n_1},
+$$
+
+covers a surprising range of natural shapes: $m$ sets the symmetry, and the three exponents
+bend the edges from pointed to swollen. The 3D version is a spherical product of two curves,
+$r_1(\theta)$ around the growth axis and $r_2(\varphi)$ from pole to pole:
+
+$$
+\mathbf{x}(\theta, \varphi) = \big( r_1 \cos\theta \, r_2 \cos\varphi,\; r_1 \sin\theta \, r_2 \cos\varphi,\; r_2 \sin\varphi \big).
+$$
+
+A ray marcher needs a distance, not a parameterisation. For a point $\mathbf{p}$ with azimuth
+$\theta$ and elevation $e$, the surface point in the same direction has the same $\theta$ and
+satisfies $\tan\varphi = r_1(\theta)\tan e$. That gives the surface radius along the ray, and the
+gap between it and $|\mathbf{p}|$ is a usable distance bound. It is not exact, so the marcher
+halves its steps while a flower is on screen.
+
+The morph between the gyroid and the bloom is a plain linear blend of the two distance fields.
+Halfway through, the lattice appears to melt into petals. The species changes (agave, orchid,
+lotus, pentas, aloe) happen at the peak of a glitch, where the jump in $m$ is hidden inside the
+corruption.
 
 ## The leak
 

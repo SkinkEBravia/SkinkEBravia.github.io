@@ -7,7 +7,7 @@ import { site } from "../site";
 
   <div class="hud hud-top label">
     <span>Computer graphics<br />Rendering<br />Visual effects</span>
-    <span class="r">Signal <b data-fps>—</b> fps<br />Seed <b data-seed>0x000000</b><br /><b data-state>Nominal</b></span>
+    <span class="r">Signal <b data-fps>—</b> fps<br />Seed <b data-seed>0x000000</b><br /><b data-state>Nominal</b><br />Form <b data-form>Gyroid</b></span>
   </div>
 
   <div class="stage">
@@ -19,7 +19,7 @@ import { site } from "../site";
 
   <div class="hud hud-bottom label">
     <span>Scroll <span class="arrow">↓</span></span>
-    <span class="r">SDF · Raymarch · WebGL2</span>
+    <span class="r" data-params>SDF · Raymarch · WebGL2</span>
   </div>
 </section>
 
@@ -35,6 +35,18 @@ import { site } from "../site";
     state.textContent = on ? "Corrupt" : "Nominal";
     state.classList.toggle("hot", on);
     if (on) seed.textContent = "0x" + ((Math.random() * 0xffffff) | 0).toString(16).toUpperCase().padStart(6, "0");
+  });
+  const formEl = document.querySelector<HTMLElement>("[data-form]")!;
+  const paramsEl = document.querySelector<HTMLElement>("[data-params]")!;
+  let lastLabel = "";
+  const f2 = (x: number) => (Math.round(x * 100) / 100).toString().replace(/^0\./, ".");
+  addEventListener("signal:form", (e) => {
+    const { w, a, name } = (e as CustomEvent<{ w: number; a: number[]; name: string }>).detail;
+    const label = w < 0.5 ? "Gyroid" : `Superformula · ${name}`;
+    if (label !== lastLabel) { lastLabel = label; formEl.textContent = label; }
+    paramsEl.textContent = w < 0.5
+      ? "Gyroid · sin x cos y + sin y cos z + sin z cos x"
+      : `Gielis · m ${a[0]} · n₁ ${f2(a[1])} · n₂ ${f2(a[2])} · n₃ ${f2(a[3])}`;
   });
   try { mountSignal(canvas); } catch (err) { console.warn(err); canvas.dataset.fallback = "true"; }
 

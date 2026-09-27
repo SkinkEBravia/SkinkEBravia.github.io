@@ -3,8 +3,11 @@
 Personal site: research, writing and study notes on computer graphics.
 Live at **https://skinkebravia.github.io**.
 
-The hero is **SIGNAL**, raymarched live in WebGL2: a gyroid lattice in thin-film chrome whose
-render pipeline glitches in bursts, leaking its own normal, depth and iteration buffers.
+The hero is **SIGNAL**, raymarched live in WebGL2: a gyroid lattice in thin-film chrome that
+morphs into 3D superformula (Gielis) flowers and back, while the render pipeline glitches in
+bursts, leaking its own normal, depth and iteration buffers.
+
+Testing: `/?form=gyroid` or `/?form=0`…`4` freezes a form; `/?at=5` jumps into the timeline.
 
 ## Adding content
 

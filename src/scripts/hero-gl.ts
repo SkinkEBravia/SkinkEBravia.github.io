@@ -16,7 +16,7 @@ void main(){ uv = p*.5+.5; gl_Position = vec4(p,0,1); }`;
 const COMMON = `#version 300 es
 precision highp float;
 in vec2 uv; out vec4 o;
-uniform vec2 R; uniform float T; uniform float B; uniform float S; uniform vec2 M; uniform float SC;
+uniform vec2 R; uniform float T; uniform float B; uniform float S; uniform vec2 M; uniform float SC; uniform float MW; uniform vec4 SA; uniform vec4 SB; uniform float SS;
 #define TAU 6.28318530718
 float h1(float n){ return fract(sin(n*127.1)*43758.5453); }
 float h2(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
@@ -24,15 +24,42 @@ float h2(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
 
 const SCENE = COMMON + `
 mat2 rot(float a){ float c=cos(a), s=sin(a); return mat2(c,-s,s,c); }
-float map(vec3 p){
-  p.yz *= rot(M.y*.5 + .25*sin(T*.21));
-  p.xz *= rot(T*.18 + M.x*.9);
+// Gielis superformula: r(a) = (|cos(m a/4)|^n2 + |sin(m a/4)|^n3)^(-1/n1), with a = b = 1
+float sf(float a, vec4 k){
+  float t = k.x*a*.25;
+  return min(pow(pow(abs(cos(t)), k.z) + pow(abs(sin(t)), k.w), -1./k.y), 3.);
+}
+// 3D supershape as a spherical product of two superformulas. For a point p we recover the
+// surface point in the same direction (azimuth maps directly; elevation via tan(phi) = r1 tan(e))
+// and return the radial gap: a distance *bound*, so the marcher steps conservatively.
+float superD(vec3 p){
+  float len = length(p);
+  float th = atan(p.y, p.x);
+  float el = asin(clamp(p.z/max(len,1e-4), -.9999, .9999));
+  float r1 = sf(th, SA);
+  float ph = atan(r1*tan(el));
+  float r2 = sf(ph, SB);
+  float c = cos(ph), s = sin(ph);
+  float R = r2*sqrt(r1*r1*c*c + s*s) * SS;
+  return (len - R) * .55;
+}
+float gyroidD(vec3 p){
   float k = 4.3 + .8*sin(T*.31);
   vec3 q = p*k;
   float g = abs(dot(sin(q), cos(q.zxy)))/k - .04;
-  float body = max(length(p) - 1.12, g*.75);
-  float core = length(p) - (.42 + .05*sin(T*1.7));
-  return min(body, core);
+  return max(length(p) - 1.12, g*.75);
+}
+float coreD(vec3 p){ return length(p) - (.42 + .05*sin(T*1.7)); }
+float map(vec3 p){
+  // gyroid: tumbles; supershape: growth axis tilted toward the viewer, turning like a turntable
+  vec3 g = p;
+  g.yz *= rot(M.y*.5 + .25*sin(T*.21));
+  g.xz *= rot(T*.18 + M.x*.9);
+  vec3 f = p;
+  f.yz *= rot(-1.05 + M.y*.6);
+  f.xy *= rot(T*.22 + M.x*1.2);
+  float body = MW < .001 ? gyroidD(g) : MW > .999 ? superD(f) : mix(gyroidD(g), superD(f), MW);
+  return min(body, coreD(g) + MW*.7);   // the core recedes as the bloom forms
 }
 vec3 nrm(vec3 p){
   vec2 e = vec2(.0015,0);
@@ -57,7 +84,8 @@ void main(){
   p.y -= .04;
   vec3 ro = vec3(0,0,5. - SC*2.2), rd = normalize(vec3(p, -1.55));
   float t = 0., d; int i;
-  for(i=0;i<96;i++){ d = map(ro+rd*t); if(d<.001 || t>8.) break; t += d*.8; }
+  float stepK = mix(.8, .5, MW);
+  for(i=0;i<160;i++){ d = map(ro+rd*t); if(d<.001 || t>8.) break; t += d*stepK; }
   bool hit = t < 8.;
 
   vec3 col = vec3(0);
@@ -75,12 +103,13 @@ void main(){
     col += film * fr * .35;
     float ao = clamp(map(pos+n*.08)/.08, 0., 1.);
     col *= .35 + .65*ao;
-    if(length(pos) < .5) col = vec3(1.,.25,.1)*2.5*(1.-fr) + env(r);
+    vec3 gp = pos; gp.yz *= rot(M.y*.5 + .25*sin(T*.21)); gp.xz *= rot(T*.18 + M.x*.9);
+    if(MW < .5 && coreD(gp) < .01) col = vec3(1.,.25,.1)*2.5*(1.-fr) + env(r);
   } else aov = 0;
 
   if(aov == 1) col = n*.5+.5;
   if(aov == 2) col = vec3(pow(1.-(t-2.)/3., 2.));
-  if(aov == 3){ float x = float(i)/96.; col = (.5+.5*cos(TAU*(x*.9 + vec3(.0,.1,.2))))*x*1.6; }
+  if(aov == 3){ float x = float(i)/160.; col = (.5+.5*cos(TAU*(x*.9 + vec3(.0,.1,.2))))*x*1.6; }
   o = vec4(col, 1.);
 }`;
 
@@ -118,10 +147,58 @@ void main(){
   o = vec4(pow(clamp(col,0.,1.), vec3(1./2.2)), 1.);
 }`;
 
+/** Superformula presets: [m, n1, n2, n3] around the axis, then from pole to pole. */
+export const FORMS: { name: string; a: number[]; b: number[] }[] = [
+  { name: "Agave", a: [10, 1.5, 6, 6], b: [2, 0.6, 1, 1] },
+  { name: "Orchid", a: [7, 2, 8, 4], b: [2, 1, 3, 3] },
+  { name: "Lotus", a: [12, 3, 10, 10], b: [3, 0.8, 2, 2] },
+  { name: "Pentas", a: [5, 2, 7, 7], b: [0, 1, 1, 1] },
+  { name: "Aloe", a: [5, 1.2, 10, 4], b: [1, 0.5, 1, 1] },
+];
+
+const sfJS = (ang: number, [m, n1, n2, n3]: number[]) =>
+  Math.min(3, (Math.abs(Math.cos((m * ang) / 4)) ** n2 + Math.abs(Math.sin((m * ang) / 4)) ** n3) ** (-1 / n1));
+/** Scale that brings a supershape's largest radius to ~1.32 (spiky forms read smaller than the sphere). */
+function fitScale(a: number[], b: number[]) {
+  let r1 = 0, rmax = 0;
+  for (let i = 0; i < 720; i++) r1 = Math.max(r1, sfJS((i / 720) * Math.PI * 2 - Math.PI, a));
+  for (let i = 0; i <= 360; i++) {
+    const ph = (i / 360) * Math.PI - Math.PI / 2, r2 = sfJS(ph, b);
+    rmax = Math.max(rmax, r2 * Math.hypot(r1 * Math.cos(ph), Math.sin(ph)));
+  }
+  return 1.32 / rmax;
+}
+const SCALES = FORMS.map((f) => fitScale(f.a, f.b));
+
+
+/*
+ * Form timeline (seconds, one cycle): gyroid holds, a glitch carries it into bloom,
+ * the bloom breathes and changes species mid-burst, then dissolves back into the lattice.
+ */
+const CYCLE = 22;
+const smooth = (x: number) => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); };
+export function formAt(t: number) {
+  const c = Math.floor(t / CYCLE), u = t - c * CYCLE;
+  const w = smooth((u - 5) / 2.2) * (1 - smooth((u - 18.5) / 2.2));
+  const species = c * 2 + (u > 12 ? 1 : 0);
+  const f = FORMS[((species % FORMS.length) + FORMS.length) % FORMS.length];
+  const breathe = 1 + 0.12 * Math.sin(t * 0.9);
+  const a = [f.a[0], f.a[1] * breathe, f.a[2], f.a[3]];
+  const b = [f.b[0], f.b[1] / breathe, f.b[2], f.b[3]];
+  // bursts that mask each change: entering bloom, species swap, leaving bloom
+  const hit = (at: number, len: number, peak: number) =>
+    u > at && u < at + len ? peak * Math.sqrt(Math.sin((Math.PI * (u - at)) / len)) : 0;
+  const burst = Math.max(hit(4.7, 0.9, 0.85), hit(11.6, 0.8, 1), hit(18.3, 0.9, 0.8));
+  return { w, a, b, name: f.name, burst, scale: SCALES[FORMS.indexOf(f)] };
+}
+
 export function mountSignal(canvas: HTMLCanvasElement) {
   const gl = canvas.getContext("webgl2", { antialias: false, alpha: false, powerPreference: "high-performance" });
   if (!gl) { canvas.dataset.fallback = "true"; return; }
   const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const qs = new URLSearchParams(location.search);
+  const freeze = qs.get("form");            // ?form=gyroid|0..n  still frames for testing
+  const startAt = +(qs.get("at") ?? 0);     // ?at=seconds        jump into the form timeline
 
   const prog = (fs: string) => {
     const p = gl.createProgram()!;
@@ -132,7 +209,7 @@ export function mountSignal(canvas: HTMLCanvasElement) {
     }
     gl.bindAttribLocation(p, 0, "p"); gl.linkProgram(p);
     const u = (n: string) => gl.getUniformLocation(p, n);
-    return { p, R: u("R"), T: u("T"), B: u("B"), S: u("S"), M: u("M"), SC: u("SC"), SRC: u("SRC") };
+    return { p, R: u("R"), T: u("T"), B: u("B"), S: u("S"), M: u("M"), SC: u("SC"), SRC: u("SRC"), MW: u("MW"), SA: u("SA"), SB: u("SB"), SS: u("SS") };
   };
   const scene = prog(SCENE), post = prog(POST);
 
@@ -180,7 +257,7 @@ export function mountSignal(canvas: HTMLCanvasElement) {
   const burstAt = (t: number) => {
     if (t > nextBurst) {
       burstStart = t; burstLen = 0.18 + Math.random() * 0.45; burstPeak = 0.55 + Math.random() * 0.45;
-      nextBurst = t + 3.5 + Math.random() * 5.5;
+      nextBurst = t + 6 + Math.random() * 6;
     }
     const k = (t - burstStart) / burstLen;
     let b = k >= 0 && k < 1 ? burstPeak * Math.sqrt(Math.sin(Math.PI * k)) : 0;
@@ -188,16 +265,22 @@ export function mountSignal(canvas: HTMLCanvasElement) {
     return b;
   };
 
-  let visible = true, running = false, t0 = performance.now(), frame = 0, glitching = false;
+  let visible = true, running = false, t0 = performance.now() - startAt * 1000, frame = 0, glitching = false;
   let slow = 0, fast = 0, lastNow = performance.now();
 
   const draw = (now: number) => {
-    const t = (now - t0) / 1000;
+    const t = Math.max(0, (now - t0) / 1000);
     mx += (tmx - mx) * 0.05; my += (tmy - my) * 0.05;
     kick *= 0.92;
     const hero = canvas.parentElement!.getBoundingClientRect();
     scrollAmt = Math.min(1, Math.max(0, -hero.top / hero.height));
-    const B = reduce ? 0 : Math.min(1, burstAt(t) + kick);
+    let form = formAt(t);
+    if (freeze !== null) {
+      const i = FORMS[+freeze] ? +freeze : 0;
+      form = { w: freeze === "gyroid" ? 0 : 1, a: FORMS[i].a, b: FORMS[i].b, name: FORMS[i].name, burst: 0, scale: SCALES[i] };
+    }
+    const B = reduce || freeze !== null ? 0 : Math.min(1, Math.max(burstAt(t), form.burst) + kick);
+    dispatchEvent(new CustomEvent("signal:form", { detail: form }));
 
     const on = B > 0.12;
     if (on !== glitching) { glitching = on; dispatchEvent(new CustomEvent("signal:burst", { detail: on })); }
@@ -210,6 +293,7 @@ export function mountSignal(canvas: HTMLCanvasElement) {
       gl.useProgram(pr.p);
       gl.uniform2f(pr.R, W, H); gl.uniform1f(pr.T, t); gl.uniform1f(pr.B, B);
       gl.uniform1f(pr.S, seed); gl.uniform2f(pr.M, mx, my); gl.uniform1f(pr.SC, scrollAmt);
+      gl.uniform1f(pr.MW, form.w); gl.uniform4fv(pr.SA, form.a); gl.uniform4fv(pr.SB, form.b); gl.uniform1f(pr.SS, form.scale);
       if (target === null) { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex); gl.uniform1i(pr.SRC, 0); }
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
