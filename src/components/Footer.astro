@@ -1,0 +1,44 @@
+---
+import { site } from "../site";
+const links = Object.entries(site.links).filter(([, v]) => v);
+const year = new Date().getFullYear();
+---
+<footer class="foot">
+  <div class="wrap top">
+    <div>
+      <p class="label">Correspondence</p>
+      <p class="serif lead">Collaboration, questions,<br /><span class="italic">or a good shader</span>, always welcome.</p>
+    </div>
+    <ul class="links">
+      {links.map(([k, v]) => (
+        <li><a class="ulink" href={k === "email" ? `mailto:${v}` : v} target={k === "email" ? undefined : "_blank"} rel="noopener"><span class="label">↗</span> {k === "x" ? "X" : k[0].toUpperCase() + k.slice(1)}</a></li>
+      ))}
+    </ul>
+  </div>
+  <div class="giant" aria-hidden="true"><span class="glitch" data-text={site.name}>{site.name}</span></div>
+  <div class="wrap bottom label">
+    <span>© {year} <span class="name-case">{site.name}</span></span>
+    <span>Set in Unbounded, Instrument Serif, Inter &amp; JetBrains Mono</span>
+    <span>Raymarched live in WebGL2 · Built with Astro</span>
+  </div>
+</footer>
+
+<style>
+  .foot { position: relative; margin-top: clamp(120px, 18vw, 240px); border-top: 1px solid var(--line); overflow: hidden; }
+  .top { display: flex; justify-content: space-between; align-items: flex-end; gap: 40px; flex-wrap: wrap; padding-top: 56px; }
+  .lead { font-size: clamp(30px, 4vw, 56px); line-height: 1.02; margin: 14px 0 0; }
+  .links { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; font-size: 18px; }
+  .giant {
+    container-type: inline-size;
+    font: 900 calc((100vw - 2 * var(--gutter)) / 8.2)/0.8 var(--display);
+    letter-spacing: -0.055em;
+    white-space: nowrap;
+    padding: clamp(40px, 7vw, 100px) 0 0 calc(var(--gutter) - 0.04em);
+    color: var(--ink-3);
+    transform: translateY(0.14em);
+    user-select: none;
+  }
+  .giant { transition: color .6s var(--ease); }
+  .giant:hover { color: var(--paper); }
+  .bottom { position: relative; display: flex; justify-content: space-between; gap: 18px; flex-wrap: wrap; padding-block: 18px; border-top: 1px solid var(--line); background: var(--ink); }
+</style>

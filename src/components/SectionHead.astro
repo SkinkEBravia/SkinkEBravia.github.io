@@ -1,0 +1,15 @@
+---
+interface Props { n: string; title: string; href?: string; count?: number }
+const { n, title, href, count } = Astro.props;
+---
+<header class="sh" data-reveal>
+  <span class="label">({n})</span>
+  <h2><span class="serif">{title}</span>{count !== undefined && <sup class="label">{String(count).padStart(2, "0")}</sup>}</h2>
+  {href && <a class="pill" href={href}><span data-decode>View all</span> →</a>}
+</header>
+<style>
+  .sh { display: grid; grid-template-columns: 80px 1fr auto; align-items: end; gap: 16px; padding-bottom: 22px; border-bottom: 1px solid var(--line-2); }
+  h2 { margin: 0; font-size: clamp(54px, 9vw, 150px); line-height: 0.82; letter-spacing: -0.03em; font-weight: 400; }
+  sup { vertical-align: top; margin-left: 0.5em; position: relative; top: 1.2em; }
+  @media (max-width: 640px) { .sh { grid-template-columns: 1fr auto; } .sh > .label { grid-column: 1 / -1; } }
+</style>

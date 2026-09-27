@@ -1,0 +1,14 @@
+---
+interface Props { n: string; title: string; lede?: string; count?: number }
+const { n, title, lede, count } = Astro.props;
+---
+<header class="wrap ph">
+  <p class="label">({n}) — Index{count !== undefined && <> · <b>{String(count).padStart(2, "0")}</b> entries</>}</p>
+  <h1><span class="glitch" data-text={title}>{title}</span></h1>
+  {lede && <p class="lede serif italic">{lede}</p>}
+</header>
+<style>
+  .ph { padding-top: clamp(130px, 18vw, 240px); padding-bottom: 40px; border-bottom: 1px solid var(--line-2); margin-bottom: 0; }
+  h1 { margin: 18px 0 0; font: 900 clamp(64px, 15vw, 250px)/0.82 var(--display); letter-spacing: -0.06em; margin-left: -0.05em; }
+  .lede { margin: 26px 0 0; font-size: clamp(22px, 2.4vw, 34px); color: var(--paper-2); max-width: 30ch; }
+</style>

@@ -1,0 +1,66 @@
+---
+title: "Signal: a render pipeline eating itself"
+description: "How the glitching sculpture at the top of this site is made, one shader pass at a time."
+date: 2026-09-27
+tags: ["WebGL", "Raymarching", "Glitch"]
+---
+
+The piece at the top of the home page is not a video. It is two fragment shaders running in your
+browser right now, and most of what looks like damage is the renderer showing you its own insides.
+
+## Pass A: the sculpture
+
+The form is a **gyroid**, a triply periodic minimal surface, carved into a sphere. A gyroid has
+a compact implicit approximation:
+
+$$
+g(\mathbf{p}) = \sin p_x \cos p_y + \sin p_y \cos p_z + \sin p_z \cos p_x .
+$$
+
+Taking $|g|/k$ at frequency $k$ and subtracting a thickness gives a thin shell. Intersecting that
+with a sphere (a `max` of two distance functions) gives the lattice. The result is not an exact
+distance field, so the ray marcher takes cautious steps of $0.8\,d$ rather than $d$.
+
+```glsl
+float map(vec3 p){
+  float k = 4.3 + .8*sin(T*.31);          // the lattice slowly breathes
+  vec3 q = p*k;
+  float g = abs(dot(sin(q), cos(q.zxy)))/k - .04;
+  float body = max(length(p) - 1.12, g*.75);
+  float core = length(p) - .42;           // a hot core inside the cage
+  return min(body, core);
+}
+```
+
+Shading is reflection-only: the reflected ray samples a procedural studio of two strip softboxes
+and two coloured kicker lights. A thin-film term tints the reflections by view angle, which is
+where the oil-slick colours come from.
+
+## The leak
+
+During a burst, the frame is cut into macroblocks. Some blocks stop showing the beauty render and
+show a debug buffer instead: **surface normals**, **depth**, or the **number of march steps** each
+pixel took. These are the images a graphics programmer stares at all day. Here they become the
+texture of the glitch.
+
+## Pass B: corruption
+
+The second pass reads the first as a texture and damages it the way a failing video decoder
+would:
+
+- **Slice tearing**: horizontal bands of random height shift sideways.
+- **Macroblock displacement**: blocks sample from the wrong place, and some get posterized to four levels, like a datamoshed codec.
+- **Pixel sorting**: in some rows, each pixel takes the brightest value from a short run to its left, so highlights drag into streaks.
+- **Chroma split**: red and blue sample at offsets that grow with the burst and with distance from the centre.
+
+Then ACES tone mapping, scanlines, a slow roll bar and a vignette. At the peak of a big hit, the
+whole frame inverts for a single frame.
+
+## Timing is the art
+
+Random glitching is just noise. What makes it read as a *signal* is rhythm: long quiet passages,
+single-frame flickers, then a hit. The glitch seed is also held for two frames, so blocks linger
+long enough to register as errors rather than static. Scroll quickly or move the pointer and you
+add energy to the next burst.
+
+> Everything interesting in a renderer happens in the buffers you never ship.

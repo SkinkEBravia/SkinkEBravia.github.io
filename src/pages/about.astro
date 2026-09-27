@@ -1,0 +1,33 @@
+---
+import Base from "../layouts/Base.astro";
+import PageHead from "../components/PageHead.astro";
+import { site } from "../site";
+const links = Object.entries(site.links).filter(([, v]) => v);
+---
+<Base title="About">
+  <PageHead n="04" title="About" />
+  <section class="wrap about">
+    <p class="big serif" data-reveal>{site.statement}</p>
+    <div class="cols">
+      <div data-reveal>
+        <p class="label">Interests</p>
+        <ul>{site.interests.map((i) => <li>{i}</li>)}</ul>
+      </div>
+      <div data-reveal>
+        <p class="label">Elsewhere</p>
+        <ul>{links.map(([k, v]) => <li><a class="ulink" href={k === "email" ? `mailto:${v}` : v}>{k === "x" ? "X" : k[0].toUpperCase() + k.slice(1)} ↗</a></li>)}</ul>
+      </div>
+      <div data-reveal>
+        <p class="label">This site</p>
+        <p class="small">The hero is raymarched live in WebGL2: a gyroid lattice in thin-film chrome, glitching in bursts. Scroll fast or move the pointer to disturb it.</p>
+      </div>
+    </div>
+  </section>
+</Base>
+<style>
+  .about { padding-top: 60px; display: grid; gap: 80px; }
+  .big { margin: 0; font-size: clamp(34px, 5vw, 76px); line-height: 1.04; letter-spacing: -0.02em; max-width: 22ch; }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 40px; border-top: 1px solid var(--line-2); padding-top: 28px; }
+  ul { list-style: none; padding: 0; margin: 14px 0 0; display: grid; gap: 6px; font-size: 19px; }
+  .small { margin: 14px 0 0; color: var(--paper-2); max-width: 40ch; }
+</style>

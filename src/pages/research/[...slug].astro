@@ -1,0 +1,88 @@
+---
+import { render } from "astro:content";
+import { Image } from "astro:assets";
+import Base from "../../layouts/Base.astro";
+import { entries, hues } from "../../lib";
+import { site } from "../../site";
+
+export async function getStaticPaths() {
+  return (await entries("research")).map((entry) => ({ params: { slug: entry.id }, props: { entry } }));
+}
+const { entry } = Astro.props;
+const { Content } = await render(entry);
+const d = entry.data;
+const [h1, h2] = hues(entry.id);
+const linkDefs = [["paper", "Paper"], ["arxiv", "arXiv"], ["code", "Code"], ["video", "Video"], ["project", "Project"]] as const;
+const bibId = `bib-${entry.id}`;
+---
+<Base title={d.title} description={d.abstract.slice(0, 160)}>
+  <article class="paper">
+    <header class="wrap head">
+      <a class="label back" href="/research/">← <span data-decode>Research</span></a>
+      <p class="label venue"><b>{d.venue}</b> · {d.year}{d.draft && <span class="hot"> · Draft</span>}</p>
+      <h1 class="serif" data-reveal>{d.title}</h1>
+      <p class="authors">
+        {d.authors.map((a, i) => (
+          <>{a.includes(site.name) ? <b>{a}</b> : <span>{a}</span>}{i < d.authors.length - 1 && ", "}</>
+        ))}
+      </p>
+      <nav class="links" aria-label="Paper links">
+        {linkDefs.map(([k, label]) => (
+          <a class="pill" href={d.links[k] || undefined} aria-disabled={d.links[k] ? undefined : "true"} target="_blank" rel="noopener">{label} ↗</a>
+        ))}
+        {d.bibtex && <a class="pill" href="#bibtex">BibTeX ↓</a>}
+      </nav>
+    </header>
+
+    <figure class="teaser" style={`--a:${h1}deg;--b:${h2}deg`}>
+      {d.teaserVideo ? (
+        <video src={d.teaserVideo} autoplay muted loop playsinline></video>
+      ) : d.cover ? (
+        <Image src={d.cover} alt={`${d.title}: teaser`} widths={[800, 1400, 2000]} sizes="100vw" />
+      ) : (
+        <div class="gen" aria-hidden="true"><span class="label">Teaser forthcoming</span></div>
+      )}
+    </figure>
+
+    <div class="wrap body">
+      <section class="abstract">
+        <p class="label">Abstract</p>
+        <p class="serif">{d.abstract}</p>
+      </section>
+      <div class="prose"><Content /></div>
+      {d.bibtex && (
+        <section id="bibtex" class="bib">
+          <div class="bib-head"><p class="label">Citation</p><button class="pill" data-copy={bibId}>Copy BibTeX</button></div>
+          <pre id={bibId}>{d.bibtex.trim()}</pre>
+        </section>
+      )}
+    </div>
+  </article>
+</Base>
+
+<style>
+  .head { padding-top: clamp(130px, 16vw, 210px); display: grid; gap: 22px; }
+  .back { width: max-content; }
+  h1 { margin: 0; font-size: clamp(44px, 7.4vw, 120px); line-height: 0.94; letter-spacing: -0.025em; max-width: 18ch; text-wrap: balance; }
+  .authors { margin: 0; font-size: 19px; color: var(--paper-2); }
+  .authors b { color: var(--paper); font-weight: 600; background: linear-gradient(var(--hot), var(--hot)) 0 100% / 100% 1px no-repeat; }
+  .links { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+  .teaser { margin: clamp(50px, 7vw, 90px) 0; border-block: 1px solid var(--line); }
+  .teaser :is(img, video) { width: 100%; max-height: 82vh; object-fit: cover; }
+  .gen {
+    aspect-ratio: 21 / 9; display: grid; place-items: end start; padding: 18px var(--gutter);
+    background:
+      repeating-linear-gradient(0deg, rgb(0 0 0 / .35) 0 1px, transparent 1px 3px),
+      radial-gradient(50% 70% at 30% 40%, hsl(var(--a) 95% 60% / .8), transparent 70%),
+      radial-gradient(40% 60% at 72% 62%, hsl(var(--b) 95% 55% / .75), transparent 70%),
+      var(--ink-2);
+  }
+  .body { display: grid; gap: 70px; }
+  .abstract { display: grid; grid-template-columns: 200px 1fr; gap: 20px; }
+  .abstract .serif { margin: 0; font-size: clamp(24px, 2.4vw, 34px); line-height: 1.3; max-width: 38ch; }
+  .prose { padding-left: clamp(0px, 14vw, 220px); }
+  .bib { border-top: 1px solid var(--line-2); padding-top: 22px; }
+  .bib-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+  .bib pre { margin: 0; padding: 22px; background: var(--ink-2); border: 1px solid var(--line); font: 13px/1.6 var(--mono); color: var(--paper-2); overflow-x: auto; }
+  @media (max-width: 760px) { .abstract { grid-template-columns: 1fr; } }
+</style>

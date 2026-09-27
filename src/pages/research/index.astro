@@ -1,0 +1,13 @@
+---
+import Base from "../../layouts/Base.astro";
+import PageHead from "../../components/PageHead.astro";
+import EntryList from "../../components/EntryList.astro";
+import Preview from "../../components/Preview.astro";
+import { entries, researchRows } from "../../lib";
+const list = await entries("research");
+---
+<Base title="Research" description="Papers and projects.">
+  <PageHead n="01" title="Research" lede="Papers and projects." count={list.length} />
+  <section class="wrap"><EntryList rows={researchRows(list)} empty="Papers forthcoming. Signal pending." /></section>
+  <Preview />
+</Base>

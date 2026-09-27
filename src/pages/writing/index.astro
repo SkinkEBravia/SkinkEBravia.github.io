@@ -1,0 +1,13 @@
+---
+import Base from "../../layouts/Base.astro";
+import PageHead from "../../components/PageHead.astro";
+import EntryList from "../../components/EntryList.astro";
+import Preview from "../../components/Preview.astro";
+import { entries, writingRows } from "../../lib";
+const list = await entries("writing");
+---
+<Base title="Writing" description="Essays and long-form writing on graphics.">
+  <PageHead n="02" title="Writing" lede="Essays and long-form writing on graphics." count={list.length} />
+  <section class="wrap"><EntryList rows={writingRows(list)} empty="Forthcoming." /></section>
+  <Preview />
+</Base>

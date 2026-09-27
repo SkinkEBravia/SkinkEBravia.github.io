@@ -1,0 +1,17 @@
+---
+import Base from "../layouts/Base.astro";
+---
+<Base title="Signal lost">
+  <section class="wrap lost">
+    <p class="label">Error · 0x194 · no carrier</p>
+    <h1><span class="glitch is-glitching" data-text="404">404</span></h1>
+    <p class="serif italic">Signal lost. This page was never rendered.</p>
+    <a class="pill" href="/">Return to base →</a>
+  </section>
+</Base>
+<style>
+  .lost { min-height: 88svh; display: grid; align-content: center; gap: 24px; padding-top: 100px; }
+  h1 { margin: 0; font: 900 clamp(120px, 34vw, 520px)/0.8 var(--display); letter-spacing: -0.07em; margin-left: -0.06em; }
+  .serif { margin: 0; font-size: clamp(26px, 3vw, 42px); color: var(--paper-2); }
+  .pill { width: max-content; }
+</style>

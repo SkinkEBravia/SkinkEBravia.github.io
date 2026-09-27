@@ -1,0 +1,48 @@
+---
+import { site } from "../site";
+const path = Astro.url.pathname;
+const items = [
+  { href: "/research/", label: "Research" },
+  { href: "/writing/", label: "Writing" },
+  { href: "/notes/", label: "Notes" },
+  { href: "/about/", label: "About" },
+];
+---
+<header class="nav">
+  <a href="/" class="mark" aria-label={`${site.name}, home`}>
+    <span class="dot" aria-hidden="true"></span>
+    <span data-decode>{site.name}</span>
+  </a>
+  <nav aria-label="Primary">
+    <ol>
+      {items.map((it, i) => (
+        <li>
+          <a href={it.href} aria-current={path.startsWith(it.href) ? "page" : undefined}>
+            <span class="n">0{i + 1}</span><span data-decode>{it.label}</span>
+          </a>
+        </li>
+      ))}
+    </ol>
+  </nav>
+</header>
+
+<style>
+  .nav {
+    position: fixed; inset: 0 0 auto 0; z-index: 50;
+    display: flex; align-items: center; justify-content: space-between; gap: 24px;
+    padding: 18px var(--gutter);
+    mix-blend-mode: difference;
+    color: #fff;
+  }
+  .mark { display: inline-flex; align-items: center; gap: 10px; font: 500 14px/1 var(--display); letter-spacing: -0.01em; }
+  .dot { width: 8px; height: 8px; background: #fff; border-radius: 50%; animation: pulse 2.4s var(--ease) infinite; }
+  @keyframes pulse { 50% { transform: scale(0.4); opacity: 0.4; } }
+  ol { display: flex; gap: clamp(14px, 2.6vw, 36px); margin: 0; padding: 0; list-style: none; }
+  ol a { display: inline-flex; gap: 6px; align-items: baseline; font: 500 11px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; }
+  .n { opacity: 0.45; font-size: 9px; }
+  ol a[aria-current="page"] span:last-child { text-decoration: underline; text-underline-offset: 4px; }
+  @media (max-width: 640px) {
+    .nav { flex-direction: column; align-items: flex-start; gap: 12px; padding-top: 14px; }
+    .n { display: none; }
+  }
+</style>

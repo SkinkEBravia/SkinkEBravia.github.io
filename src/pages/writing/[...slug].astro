@@ -1,0 +1,16 @@
+---
+import { render } from "astro:content";
+import Article from "../../layouts/Article.astro";
+import { entries, fmtDate, readingTime } from "../../lib";
+
+export async function getStaticPaths() {
+  return (await entries("writing")).map((entry) => ({ params: { slug: entry.id }, props: { entry } }));
+}
+const { entry } = Astro.props;
+const { Content } = await render(entry);
+const d = entry.data;
+---
+<Article kind="Writing" back="/writing/" title={d.title} description={d.description}
+  meta={[fmtDate(d.date), `${readingTime(entry.body)} min read`, ...d.tags]}>
+  <Content />
+</Article>

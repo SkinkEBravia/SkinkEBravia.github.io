@@ -1,0 +1,20 @@
+---
+interface Props { words: string[] }
+const { words } = Astro.props;
+const run = [...words, ...words];
+---
+<div class="marquee" aria-hidden="true">
+  <div class="track" data-marquee>
+    {[0, 1].map(() => (
+      <div class="run">{run.map((w, i) => <span class={i % 2 ? "serif italic" : ""}>{w}<i>✦</i></span>)}</div>
+    ))}
+  </div>
+</div>
+<style>
+  .marquee { overflow: hidden; border-block: 1px solid var(--line); padding: 18px 0; margin-block: clamp(80px, 12vw, 160px); }
+  .track { display: flex; width: max-content; will-change: transform; }
+  .run { display: flex; flex-shrink: 0; }
+  span { font: 900 clamp(34px, 6vw, 88px)/1 var(--display); letter-spacing: -0.04em; padding-right: 0.4em; white-space: nowrap; }
+  span.serif { font-family: var(--serif); font-weight: 400; letter-spacing: -0.01em; font-size: clamp(40px, 7vw, 104px); color: var(--paper-2); }
+  i { font-style: normal; color: var(--hot); font-size: 0.5em; vertical-align: middle; padding-left: 0.4em; }
+</style>

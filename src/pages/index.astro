@@ -1,0 +1,53 @@
+---
+import Base from "../layouts/Base.astro";
+import Hero from "../components/Hero.astro";
+import Marquee from "../components/Marquee.astro";
+import SectionHead from "../components/SectionHead.astro";
+import EntryList from "../components/EntryList.astro";
+import Preview from "../components/Preview.astro";
+import { site } from "../site";
+import { entries, researchRows, writingRows, noteRows } from "../lib";
+
+const research = await entries("research");
+const selected = research.filter((r) => r.data.selected);
+const writing = await entries("writing");
+const notes = await entries("notes");
+---
+<Base>
+  <Hero />
+
+  <section class="wrap statement">
+    <p class="label" data-reveal>(00) — Statement</p>
+    <p class="big serif" data-reveal>{site.statement}</p>
+    <ul class="interests" data-reveal>
+      {site.interests.map((i, n) => <li><span class="label">{String(n + 1).padStart(2, "0")}</span>{i}</li>)}
+    </ul>
+  </section>
+
+  <Marquee words={["Computer graphics", "rendering", "Light transport", "visual effects", "Real-time", "simulation"]} />
+
+  <section class="wrap block">
+    <SectionHead n="01" title="Research" href="/research/" count={research.length} />
+    <EntryList rows={researchRows(selected.length ? selected : research.slice(0, 5))} empty="Papers forthcoming. Signal pending." />
+  </section>
+
+  <section class="wrap block">
+    <SectionHead n="02" title="Writing" href="/writing/" count={writing.length} />
+    <EntryList rows={writingRows(writing.slice(0, 5))} />
+  </section>
+
+  <section class="wrap block">
+    <SectionHead n="03" title="Notes" href="/notes/" count={notes.length} />
+    <EntryList rows={noteRows(notes.slice(0, 6))} />
+  </section>
+
+  <Preview />
+</Base>
+
+<style>
+  .statement { padding-top: clamp(100px, 14vw, 200px); display: grid; gap: 34px; }
+  .big { margin: 0; font-size: clamp(34px, 5.4vw, 86px); line-height: 1.02; letter-spacing: -0.02em; max-width: 20ch; text-wrap: balance; }
+  .interests { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 10px 28px; font-size: 18px; color: var(--paper-2); }
+  .interests li { display: flex; gap: 8px; align-items: baseline; }
+  .block + .block { margin-top: clamp(100px, 14vw, 180px); }
+</style>

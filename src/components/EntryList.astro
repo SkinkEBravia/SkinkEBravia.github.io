@@ -1,0 +1,58 @@
+---
+import { hues } from "../lib";
+export interface Row {
+  href: string; slug: string; title: string; meta: string; aside: string; kind: string; cover?: string;
+}
+interface Props { rows: Row[]; empty?: string }
+const { rows, empty = "Forthcoming." } = Astro.props;
+---
+{rows.length === 0 ? (
+  <p class="empty serif italic" data-reveal>{empty}</p>
+) : (
+  <ol class="list">
+    {rows.map((r, i) => {
+      const [h1, h2] = hues(r.slug);
+      return (
+        <li data-reveal style={`transition-delay:${Math.min(i, 6) * 60}ms`}>
+          <a href={r.href} data-row data-h1={h1} data-h2={h2} data-cover={r.cover} data-kind={r.kind}>
+            <span class="idx label">{String(i + 1).padStart(3, "0")}</span>
+            <span class="title" data-decode>{r.title}</span>
+            <span class="meta label">{r.meta}</span>
+            <span class="aside label">{r.aside}</span>
+            <span class="go" aria-hidden="true">↗</span>
+          </a>
+        </li>
+      );
+    })}
+  </ol>
+)}
+<style>
+  .list { list-style: none; margin: 0; padding: 0; }
+  a {
+    position: relative;
+    display: grid; grid-template-columns: 80px 1fr 220px 120px 30px; align-items: baseline; gap: 16px;
+    padding: 26px 0; border-bottom: 1px solid var(--line);
+    isolation: isolate;
+  }
+  a::before {
+    content: ""; position: absolute; inset: 0 calc(var(--gutter) * -1); z-index: -1;
+    background: var(--paper);
+    transform: scaleY(0); transform-origin: bottom;
+    transition: transform 0.5s var(--ease);
+  }
+  a:hover::before, a:focus-visible::before { transform: scaleY(1); }
+  a:hover, a:focus-visible { color: var(--ink); }
+  a:hover .label, a:focus-visible .label { color: var(--ink); }
+  .title { font: 400 clamp(26px, 3.2vw, 46px)/1.05 var(--serif); letter-spacing: -0.01em; transition: transform 0.5s var(--ease); }
+  a:hover .title { transform: translateX(14px); font-style: italic; }
+  .aside { text-align: right; }
+  .go { font-size: 22px; transition: transform 0.5s var(--ease); justify-self: end; }
+  a:hover .go { transform: rotate(45deg); }
+  .empty { font-size: clamp(28px, 3vw, 40px); color: var(--dim); padding: 30px 0; margin: 0; border-bottom: 1px solid var(--line); }
+  @media (max-width: 860px) {
+    a { grid-template-columns: 1fr auto; gap: 6px 12px; }
+    .idx, .go { display: none; }
+    .title { grid-column: 1 / -1; }
+    .aside { text-align: right; }
+  }
+</style>
