@@ -1,6 +1,6 @@
 ---
 title: "Signal: a render pipeline eating itself"
-description: "How the glitching sculpture at the top of this site is made: a gyroid, a superformula bloom, and two shader passes."
+description: "How the glitching sculpture at the top of this site is made: a gyroid, a superformula urchin, and two shader passes."
 date: 2026-09-27
 tags: ["WebGL", "Raymarching", "Superformula"]
 ---
@@ -36,33 +36,40 @@ Shading is reflection-only: the reflected ray samples a procedural studio of two
 and two coloured kicker lights. A thin-film term tints the reflections by view angle, which is
 where the oil-slick colours come from.
 
-## The second form: a superformula bloom
+## The second form: a superformula urchin
 
-Every twenty-odd seconds, a burst carries the lattice into a flower. The flower is a **3D
-superformula**, Johan Gielis's 2003 generalisation of the superellipse. One curve,
-
-$$
-r(\varphi) = \left( \left|\cos\tfrac{m\varphi}{4}\right|^{n_2} + \left|\sin\tfrac{m\varphi}{4}\right|^{n_3} \right)^{-1/n_1},
-$$
-
-covers a surprising range of natural shapes: $m$ sets the symmetry, and the three exponents
-bend the edges from pointed to swollen. The 3D version is a spherical product of two curves,
-$r_1(\theta)$ around the growth axis and $r_2(\varphi)$ from pole to pole:
+Every twenty-odd seconds, a burst carries the lattice into a spiked shell. Its outline comes from
+the **superformula**, Johan Gielis's 2003 generalisation of the superellipse:
 
 $$
-\mathbf{x}(\theta, \varphi) = \big( r_1 \cos\theta \, r_2 \cos\varphi,\; r_1 \sin\theta \, r_2 \cos\varphi,\; r_2 \sin\varphi \big).
+r(\varphi) = \left( \left|\cos\tfrac{m\varphi}{4}\right|^{n_2} + \left|\sin\tfrac{m\varphi}{4}\right|^{n_3} \right)^{-1/n_1}.
 $$
 
-A ray marcher needs a distance, not a parameterisation. For a point $\mathbf{p}$ with azimuth
-$\theta$ and elevation $e$, the surface point in the same direction has the same $\theta$ and
-satisfies $\tan\varphi = r_1(\theta)\tan e$. That gives the surface radius along the ray, and the
-gap between it and $|\mathbf{p}|$ is a usable distance bound. It is not exact, so the marcher
-halves its steps while a flower is on screen.
+With $m = 19$, $n_1 = 9$, $n_2 = 14$, $n_3 = 11$ it draws a sunburst: nineteen identical spikes,
+one every $2\pi/m$ radians.
 
-The morph between the gyroid and the bloom is a plain linear blend of the two distance fields.
-Halfway through, the lattice appears to melt into petals. The species changes (agave, orchid,
-lotus, pentas, aloe) happen at the peak of a glitch, where the jump in $m$ is hidden inside the
-corruption.
+The usual 3D version is a *spherical product* of two such curves, one around an axis and one
+from pole to pole. That keeps the symmetry in only one direction, so the result looks like a
+softly extruded star, not a sea urchin. To keep the 2D curve's symmetry in **every** direction,
+this piece revolves each spike around its own axis instead:
+
+1. Spike directions are spread over the sphere at the curve's own angular spacing
+   $\Delta = 2\pi/m$: latitude rings $\Delta$ apart, each carrying about
+   $2\pi\cos(\text{lat})/\Delta$ spikes, alternate rings staggered.
+2. For a point $\mathbf{p}$, find the nearest spike direction $\mathbf{c}$. Only three rings can
+   contain it, so this is constant-time. Let $\psi = \angle(\mathbf{p}, \mathbf{c})$.
+3. The surface radius in that direction is the 2D curve read outward from a spike tip,
+   $R = r(\varphi_{\text{tip}} + \psi)$, clamped at half a spacing, where the valley between
+   spikes sits.
+
+So every spike has exactly the 2D curve's cross-section, whichever way you look. The gap
+$|\mathbf{p}| - R$ is only a bound on the true distance (the spikes are steep), so the marcher
+takes shorter steps while an urchin is on screen, and rays that graze a spike without converging
+count as misses rather than speckle.
+
+The morph between the gyroid and the urchin is a plain linear blend of the two distance fields.
+Halfway through, the lattice appears to sprout spikes. Changes of species (sunburst, urchin,
+star, pollen) happen at the peak of a glitch, where the jump in $m$ hides inside the corruption.
 
 ## The leak
 

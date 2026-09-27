@@ -41,12 +41,12 @@ import { site } from "../site";
   let lastLabel = "";
   const f2 = (x: number) => (Math.round(x * 100) / 100).toString().replace(/^0\./, ".");
   addEventListener("signal:form", (e) => {
-    const { w, a, name } = (e as CustomEvent<{ w: number; a: number[]; name: string }>).detail;
+    const { w, k, name } = (e as CustomEvent<{ w: number; k: number[]; name: string }>).detail;
     const label = w < 0.5 ? "Gyroid" : `Superformula · ${name}`;
     if (label !== lastLabel) { lastLabel = label; formEl.textContent = label; }
     paramsEl.textContent = w < 0.5
       ? "Gyroid · sin x cos y + sin y cos z + sin z cos x"
-      : `Gielis · m ${a[0]} · n₁ ${f2(a[1])} · n₂ ${f2(a[2])} · n₃ ${f2(a[3])}`;
+      : `Gielis · m ${k[0]} · n₁ ${f2(k[1])} · n₂ ${f2(k[2])} · n₃ ${f2(k[3])}`;
   });
   try { mountSignal(canvas); } catch (err) { console.warn(err); canvas.dataset.fallback = "true"; }
 

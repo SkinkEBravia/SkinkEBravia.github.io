@@ -16,7 +16,7 @@ void main(){ uv = p*.5+.5; gl_Position = vec4(p,0,1); }`;
 const COMMON = `#version 300 es
 precision highp float;
 in vec2 uv; out vec4 o;
-uniform vec2 R; uniform float T; uniform float B; uniform float S; uniform vec2 M; uniform float SC; uniform float MW; uniform vec4 SA; uniform vec4 SB; uniform float SS;
+uniform vec2 R; uniform float T; uniform float B; uniform float S; uniform vec2 M; uniform float SC; uniform float MW; uniform vec4 SK; uniform vec2 ST; uniform float SS;
 #define TAU 6.28318530718
 float h1(float n){ return fract(sin(n*127.1)*43758.5453); }
 float h2(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
@@ -29,19 +29,34 @@ float sf(float a, vec4 k){
   float t = k.x*a*.25;
   return min(pow(pow(abs(cos(t)), k.z) + pow(abs(sin(t)), k.w), -1./k.y), 3.);
 }
-// 3D supershape as a spherical product of two superformulas. For a point p we recover the
-// surface point in the same direction (azimuth maps directly; elevation via tan(phi) = r1 tan(e))
-// and return the radial gap: a distance *bound*, so the marcher steps conservatively.
+// Isotropic 3D superformula ("urchin"). The 2D curve has one spike every 2*pi/m radians, so we
+// lay spikes over the sphere at that same angular spacing (latitude rings, staggered), find the
+// spike nearest to p's direction, and revolve the 2D spike profile around it:
+//   R(dir) = r(phi_tip + psi * stretch),  psi = angle between dir and its nearest spike.
+// Every spike keeps the 2D cross-section and the symmetry holds in all directions.
+vec3 sph(float la, float az){ return vec3(cos(la)*cos(az), cos(la)*sin(az), sin(la)); }
+float nearestSpike(vec3 d, float D){
+  const float PI = 3.14159265;
+  float lat = asin(clamp(d.z, -1., 1.)), th = atan(d.y, d.x);
+  float nr = max(2., floor(PI/D + .5)), dl = PI/nr;
+  float i0 = floor((lat + PI*.5)/dl + .5);
+  float best = -1.;
+  for(int k=-1;k<=1;k++){
+    float i = clamp(i0 + float(k), 0., nr);
+    float la = -PI*.5 + i*dl;
+    float n = max(1., floor(TAU*cos(la)/D + .5));
+    float st = TAU/n, off = mod(i, 2.)*.5*st;
+    float j = floor((th - off)/st + .5);
+    best = max(best, dot(d, sph(la, off + j*st)));
+  }
+  return acos(clamp(best, -1., 1.));
+}
 float superD(vec3 p){
   float len = length(p);
-  float th = atan(p.y, p.x);
-  float el = asin(clamp(p.z/max(len,1e-4), -.9999, .9999));
-  float r1 = sf(th, SA);
-  float ph = atan(r1*tan(el));
-  float r2 = sf(ph, SB);
-  float c = cos(ph), s = sin(ph);
-  float R = r2*sqrt(r1*r1*c*c + s*s) * SS;
-  return (len - R) * .55;
+  float D = TAU/SK.x;
+  float psi = min(nearestSpike(p/max(len, 1e-4), D), D*.5);
+  float R = sf(ST.x + psi*ST.y, SK) * SS;
+  return (len - R) * .45;   // a bound, not a true distance: spikes are steep
 }
 float gyroidD(vec3 p){
   float k = 4.3 + .8*sin(T*.31);
@@ -51,15 +66,15 @@ float gyroidD(vec3 p){
 }
 float coreD(vec3 p){ return length(p) - (.42 + .05*sin(T*1.7)); }
 float map(vec3 p){
-  // gyroid: tumbles; supershape: growth axis tilted toward the viewer, turning like a turntable
+  // both forms tumble slowly and lean toward the pointer
   vec3 g = p;
   g.yz *= rot(M.y*.5 + .25*sin(T*.21));
   g.xz *= rot(T*.18 + M.x*.9);
   vec3 f = p;
-  f.yz *= rot(-1.05 + M.y*.6);
-  f.xy *= rot(T*.22 + M.x*1.2);
+  f.yz *= rot(.3*sin(T*.17) + M.y*.6);
+  f.xz *= rot(T*.12 + M.x*1.2);
   float body = MW < .001 ? gyroidD(g) : MW > .999 ? superD(f) : mix(gyroidD(g), superD(f), MW);
-  return min(body, coreD(g) + MW*.7);   // the core recedes as the bloom forms
+  return min(body, coreD(g) + MW*.7);   // the core recedes as the urchin forms
 }
 vec3 nrm(vec3 p){
   vec2 e = vec2(.0015,0);
@@ -84,9 +99,9 @@ void main(){
   p.y -= .04;
   vec3 ro = vec3(0,0,5. - SC*2.2), rd = normalize(vec3(p, -1.55));
   float t = 0., d; int i;
-  float stepK = mix(.8, .5, MW);
-  for(i=0;i<160;i++){ d = map(ro+rd*t); if(d<.001 || t>8.) break; t += d*stepK; }
-  bool hit = t < 8.;
+  float stepK = mix(.8, .55, MW);
+  for(i=0;i<200;i++){ d = map(ro+rd*t); if(d < .0006*t || t > 8.) break; t += d*stepK; }
+  bool hit = t < 8. && d < .004*t;   // rays that run out of steps while grazing a spike are misses
 
   vec3 col = vec3(0);
   vec2 g = fract(f/(16.*R.y/720.)) - .5;
@@ -109,7 +124,7 @@ void main(){
 
   if(aov == 1) col = n*.5+.5;
   if(aov == 2) col = vec3(pow(1.-(t-2.)/3., 2.));
-  if(aov == 3){ float x = float(i)/160.; col = (.5+.5*cos(TAU*(x*.9 + vec3(.0,.1,.2))))*x*1.6; }
+  if(aov == 3){ float x = float(i)/200.; col = (.5+.5*cos(TAU*(x*.9 + vec3(.0,.1,.2))))*x*1.6; }
   o = vec4(col, 1.);
 }`;
 
@@ -147,33 +162,34 @@ void main(){
   o = vec4(pow(clamp(col,0.,1.), vec3(1./2.2)), 1.);
 }`;
 
-/** Superformula presets: [m, n1, n2, n3] around the axis, then from pole to pole. */
-export const FORMS: { name: string; a: number[]; b: number[] }[] = [
-  { name: "Agave", a: [10, 1.5, 6, 6], b: [2, 0.6, 1, 1] },
-  { name: "Orchid", a: [7, 2, 8, 4], b: [2, 1, 3, 3] },
-  { name: "Lotus", a: [12, 3, 10, 10], b: [3, 0.8, 2, 2] },
-  { name: "Pentas", a: [5, 2, 7, 7], b: [0, 1, 1, 1] },
-  { name: "Aloe", a: [5, 1.2, 10, 4], b: [1, 0.5, 1, 1] },
+/** Superformula presets [m, n1, n2, n3]; each becomes an urchin with the 2D curve's spike profile. */
+export const FORMS: { name: string; k: number[] }[] = [
+  { name: "Sunburst", k: [19, 9, 14, 11] },
+  { name: "Urchin", k: [12, 1.5, 6, 6] },
+  { name: "Star", k: [14, 0.4, 1, 1] },
+  { name: "Pollen", k: [20, 2, 4, 4] },
 ];
 
 const sfJS = (ang: number, [m, n1, n2, n3]: number[]) =>
   Math.min(3, (Math.abs(Math.cos((m * ang) / 4)) ** n2 + Math.abs(Math.sin((m * ang) / 4)) ** n3) ** (-1 / n1));
-/** Scale that brings a supershape's largest radius to ~1.32 (spiky forms read smaller than the sphere). */
-function fitScale(a: number[], b: number[]) {
-  let r1 = 0, rmax = 0;
-  for (let i = 0; i < 720; i++) r1 = Math.max(r1, sfJS((i / 720) * Math.PI * 2 - Math.PI, a));
-  for (let i = 0; i <= 360; i++) {
-    const ph = (i / 360) * Math.PI - Math.PI / 2, r2 = sfJS(ph, b);
-    rmax = Math.max(rmax, r2 * Math.hypot(r1 * Math.cos(ph), Math.sin(ph)));
-  }
-  return 1.32 / rmax;
-}
-const SCALES = FORMS.map((f) => fitScale(f.a, f.b));
 
+/**
+ * Per-preset constants: where the spike tip sits in the 2D period, how far (and which way) the
+ * valley is, so a half spike-spacing of psi maps tip -> valley, and a scale for a max radius ~1.28.
+ */
+function spikeFit(k: number[]) {
+  const period = (2 * Math.PI) / k[0], N = 2000;
+  let tip = 0, rMax = -1;
+  for (let i = 0; i < N; i++) { const a = (i / N) * period, r = sfJS(a, k); if (r > rMax) { rMax = r; tip = a; } }
+  let valley = tip, rMin = Infinity;
+  for (let i = 0; i <= N; i++) { const a = tip + (i / N) * period * 0.5, r = sfJS(a, k); if (r < rMin) { rMin = r; valley = a; } }
+  return { tip, stretch: (valley - tip) / (period / 2), scale: 1.28 / rMax };
+}
+const FITS = FORMS.map((f) => spikeFit(f.k));
 
 /*
- * Form timeline (seconds, one cycle): gyroid holds, a glitch carries it into bloom,
- * the bloom breathes and changes species mid-burst, then dissolves back into the lattice.
+ * Form timeline (seconds, one cycle): gyroid holds, a glitch carries it into an urchin,
+ * the urchin breathes and changes species mid-burst, then dissolves back into the lattice.
  */
 const CYCLE = 22;
 const smooth = (x: number) => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); };
@@ -182,14 +198,13 @@ export function formAt(t: number) {
   const w = smooth((u - 5) / 2.2) * (1 - smooth((u - 18.5) / 2.2));
   const species = c * 2 + (u > 12 ? 1 : 0);
   const f = FORMS[((species % FORMS.length) + FORMS.length) % FORMS.length];
-  const breathe = 1 + 0.12 * Math.sin(t * 0.9);
-  const a = [f.a[0], f.a[1] * breathe, f.a[2], f.a[3]];
-  const b = [f.b[0], f.b[1] / breathe, f.b[2], f.b[3]];
-  // bursts that mask each change: entering bloom, species swap, leaving bloom
+  const breathe = 1 + 0.06 * Math.sin(t * 0.9);
+  const k = [f.k[0], f.k[1] * breathe, f.k[2], f.k[3]];
+  // bursts that mask each change: entering the urchin, species swap, leaving it
   const hit = (at: number, len: number, peak: number) =>
     u > at && u < at + len ? peak * Math.sqrt(Math.sin((Math.PI * (u - at)) / len)) : 0;
   const burst = Math.max(hit(4.7, 0.9, 0.85), hit(11.6, 0.8, 1), hit(18.3, 0.9, 0.8));
-  return { w, a, b, name: f.name, burst, scale: SCALES[FORMS.indexOf(f)] };
+  return { w, k, name: f.name, burst, fit: FITS[FORMS.indexOf(f)] };
 }
 
 export function mountSignal(canvas: HTMLCanvasElement) {
@@ -209,7 +224,7 @@ export function mountSignal(canvas: HTMLCanvasElement) {
     }
     gl.bindAttribLocation(p, 0, "p"); gl.linkProgram(p);
     const u = (n: string) => gl.getUniformLocation(p, n);
-    return { p, R: u("R"), T: u("T"), B: u("B"), S: u("S"), M: u("M"), SC: u("SC"), SRC: u("SRC"), MW: u("MW"), SA: u("SA"), SB: u("SB"), SS: u("SS") };
+    return { p, R: u("R"), T: u("T"), B: u("B"), S: u("S"), M: u("M"), SC: u("SC"), SRC: u("SRC"), MW: u("MW"), SK: u("SK"), ST: u("ST"), SS: u("SS") };
   };
   const scene = prog(SCENE), post = prog(POST);
 
@@ -277,7 +292,7 @@ export function mountSignal(canvas: HTMLCanvasElement) {
     let form = formAt(t);
     if (freeze !== null) {
       const i = FORMS[+freeze] ? +freeze : 0;
-      form = { w: freeze === "gyroid" ? 0 : 1, a: FORMS[i].a, b: FORMS[i].b, name: FORMS[i].name, burst: 0, scale: SCALES[i] };
+      form = { w: freeze === "gyroid" ? 0 : 1, k: FORMS[i].k, name: FORMS[i].name, burst: 0, fit: FITS[i] };
     }
     const B = reduce || freeze !== null ? 0 : Math.min(1, Math.max(burstAt(t), form.burst) + kick);
     dispatchEvent(new CustomEvent("signal:form", { detail: form }));
@@ -293,7 +308,7 @@ export function mountSignal(canvas: HTMLCanvasElement) {
       gl.useProgram(pr.p);
       gl.uniform2f(pr.R, W, H); gl.uniform1f(pr.T, t); gl.uniform1f(pr.B, B);
       gl.uniform1f(pr.S, seed); gl.uniform2f(pr.M, mx, my); gl.uniform1f(pr.SC, scrollAmt);
-      gl.uniform1f(pr.MW, form.w); gl.uniform4fv(pr.SA, form.a); gl.uniform4fv(pr.SB, form.b); gl.uniform1f(pr.SS, form.scale);
+      gl.uniform1f(pr.MW, form.w); gl.uniform4fv(pr.SK, form.k); gl.uniform2f(pr.ST, form.fit.tip, form.fit.stretch); gl.uniform1f(pr.SS, form.fit.scale);
       if (target === null) { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex); gl.uniform1i(pr.SRC, 0); }
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
