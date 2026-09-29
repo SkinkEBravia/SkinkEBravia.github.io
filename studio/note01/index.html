@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>INTRUSION — Note 01</title>
+<style>
+  @font-face { font-family: "Unbounded"; font-weight: 900; src: url(../../node_modules/@fontsource/unbounded/files/unbounded-latin-900-normal.woff2); }
+  @font-face { font-family: "Serif"; font-weight: 400; src: url(../../node_modules/@fontsource/instrument-serif/files/instrument-serif-latin-400-normal.woff2); }
+  @font-face { font-family: "Serif"; font-style: italic; font-weight: 400; src: url(../../node_modules/@fontsource/instrument-serif/files/instrument-serif-latin-400-italic.woff2); }
+  @font-face { font-family: "Mono"; font-weight: 500; src: url(../../node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-500-normal.woff2); }
+  html, body { margin: 0; background: #000; }
+  canvas { display: block; width: 100vw; max-width: 1920px; }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<script type="module">
+/*
+ * INTRUSION: four SIGGRAPH techniques, each overtaken by its learned counterpart.
+ * Deterministic per frame: window.renderFrame(n) draws frame n; capture.mjs records them.
+ */
+const TL = await (await fetch("timeline.json")).json();
+const W = 960, H = 540, FPS = TL.fps, FRAMES = TL.duration * FPS;
+const canvas = document.getElementById("gl");
+canvas.width = W; canvas.height = H;
+const gl = canvas.getContext("webgl2", { preserveDrawingBuffer: true, antialias: false });
+gl.getExtension("EXT_color_buffer_float");
+
+// ------------------------------------------------------------------ shaders
+const VS = `#version 300 es
+in vec2 p; out vec2 uv; void main(){ uv = p*.5+.5; gl_Position = vec4(p,0,1); }`;
+
+const HEAD = `#version 300 es
+precision highp float;
+in vec2 uv; out vec4 o;
+uniform vec2 R; uniform float T, LT, AI, B, S, SC, SPP;
+#define TAU 6.28318530718
+#define PI 3.14159265359
+float h1(float n){ return fract(sin(n*127.1)*43758.5453); }
+float h2(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+vec3 h33(vec3 p){
+  p = vec3(dot(p,vec3(127.1,311.7,74.7)), dot(p,vec3(269.5,183.3,246.1)), dot(p,vec3(113.5,271.9,124.6)));
+  return -1. + 2.*fract(sin(p)*43758.5453123);
+}
+// gradient noise with Perlin's 2002 quintic fade
+float gnoise(vec3 p){
+  vec3 i = floor(p), f = fract(p), u = f*f*f*(f*(f*6.-15.)+10.);
+  return mix(mix(mix(dot(h33(i), f), dot(h33(i+vec3(1,0,0)), f-vec3(1,0,0)), u.x),
+                 mix(dot(h33(i+vec3(0,1,0)), f-vec3(0,1,0)), dot(h33(i+vec3(1,1,0)), f-vec3(1,1,0)), u.x), u.y),
+             mix(mix(dot(h33(i+vec3(0,0,1)), f-vec3(0,0,1)), dot(h33(i+vec3(1,0,1)), f-vec3(1,0,1)), u.x),
+                 mix(dot(h33(i+vec3(0,1,1)), f-vec3(0,1,1)), dot(h33(i+vec3(1,1,1)), f-vec3(1,1,1)), u.x), u.y), u.z);
+}
+float fbm(vec3 p){ float a = .5, s = 0.; for(int i=0;i<5;i++){ s += a*gnoise(p); p *= 2.03; a *= .5; } return s; }
+float turb(vec3 p){ float a = .5, s = 0.; for(int i=0;i<5;i++){ s += a*abs(gnoise(p)); p *= 2.03; a *= .5; } return s; }
+float gauss(vec2 f, float k){ // Box-Muller, one sample per pixel/channel/step
+  float u1 = max(h2(f + k*17.13), 1e-4), u2 = h2(f*1.37 + k*9.71);
+  return sqrt(-2.*log(u1))*cos(TAU*u2);
+}
+mat2 rot(float a){ float c=cos(a), s=sin(a); return mat2(c,-s,s,c); }
+`;
+
+const SCENE = HEAD + `
+// --------------------------------------------------------------- the eye
+vec3 eye(vec2 q, float look){
+  vec2 c = vec2(.06*sin(T*.7)*look, .03*cos(T*.5)*look);
+  float lid = .44*(1. - pow(abs(q.x/1.15), 2.2));
+  float open = step(abs(q.y), lid);
+  vec2 d = q - c; float r = length(d), a = atan(d.y, d.x);
+  // sclera with veins
+  float vein = smoothstep(.72, .98, 1. - abs(fbm(vec3(q*7., 1.3))*2.)) * smoothstep(.2, .9, length(q));
+  vec3 col = mix(vec3(.86,.8,.76), vec3(.55,.04,.04), vein*.8);
+  col *= .65 + .35*smoothstep(lid, lid*.2, abs(q.y));
+  // iris: radial fibres
+  float fib = fbm(vec3(a*6., r*18., 2.)) * .5 + .5;
+  vec3 iris = mix(vec3(.02,.12,.12), vec3(.35,.95,.85), fib) * (1. - smoothstep(.18, .3, r)*.7);
+  iris = mix(iris, vec3(1., .35, .08), smoothstep(.12, .05, r) * .6);
+  col = mix(col, iris, smoothstep(.305, .29, r));
+  col *= 1. - smoothstep(.27, .305, r)*smoothstep(.315, .3, r)*.8;          // limbal ring
+  float pupil = .1 + .02*sin(T*2.3);
+  col = mix(col, vec3(0.), smoothstep(pupil + .01, pupil, r));
+  col += vec3(1.) * smoothstep(.035, .02, length(d - vec2(-.08, .09)));     // catchlight
+  vec3 skin = vec3(.09,.05,.05) * (.6 + .4*fbm(vec3(q*30., 4.)));
+  return mix(skin, col, open);
+}
+
+// --------------------------------------------------------------- 1: Perlin marble
+vec3 marble(vec2 f){
+  vec2 p = (f - .5*R)/R.y;
+  vec3 bg = vec3(.03,.035,.05) + vec3(.05,.07,.1)*turb(vec3(p*3., T*.05));
+  vec3 ro = vec3(0,0,3), rd = normalize(vec3(p, -1.6));
+  float b = dot(ro, rd), c = dot(ro,ro) - .78*.78, h = b*b - c;
+  if(h < 0.) return bg;
+  vec3 pos = ro + rd*(-b - sqrt(h)), n = normalize(pos);
+  vec3 q = pos; q.xz *= rot(T*.15); q.xy *= rot(.3);
+  float v = .5 + .5*sin(q.x*5. + 7.*turb(q*1.6));             // Perlin's marble: sin(x + turbulence)
+  vec3 alb = mix(vec3(.12,.16,.28), vec3(.93,.92,.88), pow(v, .6));
+  vec3 L = normalize(vec3(-.6,.7,.8));
+  float dif = max(dot(n, L), 0.), spec = pow(max(dot(reflect(-L, n), -rd), 0.), 60.);
+  return alb*(.12 + dif*1.1) + spec*.6 + vec3(.05,.07,.12)*(1. - n.z);
+}
+vec3 scene1(vec2 f){
+  vec3 x0 = marble(f);
+  if(AI <= 0.) return x0;
+  float k = floor(T*24.);
+  vec3 eps = vec3(gauss(f, k), gauss(f, k + 3.1), gauss(f, k + 7.3));
+  vec2 q = (f - .5*R)/R.y * 1.25;
+  // forward process to pure noise, then the reverse process lands somewhere else
+  float fwd = smoothstep(0., .42, AI), rev = smoothstep(.5, 1., AI);
+  vec3 x = AI < .46 ? x0 : eye(q, 1.) * 1.1;
+  float ab = AI < .46 ? 1. - fwd : rev*rev;
+  return max(sqrt(ab)*x + sqrt(1. - ab)*eps*.45, 0.);
+}
+
+// --------------------------------------------------------------- 2: Cornell box path tracer
+uint seed;
+float rnd(){ seed = seed*747796405u + 2891336453u; uint w = ((seed >> ((seed >> 28u) + 4u)) ^ seed)*277803737u; return float((w >> 22u) ^ w)/4294967295.; }
+vec3 cosDir(vec3 n){
+  float a = TAU*rnd(), z = rnd(), r = sqrt(z);
+  vec3 t = normalize(abs(n.y) < .9 ? cross(n, vec3(0,1,0)) : cross(n, vec3(1,0,0))), b = cross(n, t);
+  return normalize(t*r*cos(a) + b*r*sin(a) + n*sqrt(1. - z));
+}
+const vec3 SP1 = vec3(-.45,-.6,-.35); const float SR1 = .4;   // mirror
+const vec3 SP2 = vec3(.45,-.65,.25);  const float SR2 = .35;  // diffuse
+float sph(vec3 ro, vec3 rd, vec3 c, float r){
+  vec3 oc = ro - c; float b = dot(oc, rd), h = b*b - dot(oc,oc) + r*r;
+  if(h < 0.) return 1e9; h = sqrt(h);
+  float t = -b - h; if(t > 1e-3) return t; t = -b + h; return t > 1e-3 ? t : 1e9;
+}
+// returns t; out: normal, albedo, material (0 diffuse, 1 mirror, 2 light)
+float trace(vec3 ro, vec3 rd, out vec3 n, out vec3 alb, out int mat){
+  float t = 1e9; mat = 0;
+  for(int a=0;a<3;a++){
+    for(int s=-1;s<=1;s+=2){
+      float d = rd[a] == 0. ? 1e9 : (float(s) - ro[a])/rd[a];
+      if(d > 1e-3 && d < t){
+        vec3 p = ro + rd*d;
+        if(a == 2 && s == 1) continue;                        // open front
+        if(any(greaterThan(abs(p), vec3(1.001)))) continue;   // hit must lie on the box, not its plane
+        t = d; n = vec3(0); n[a] = -float(s); alb = vec3(.73);
+        if(a == 0) alb = s < 0 ? vec3(.63,.065,.05) : vec3(.14,.45,.09);
+        mat = (a == 1 && s == 1 && abs(p.x) < .28 && abs(p.z) < .28) ? 2 : 0;
+      }
+    }
+  }
+  float t1 = sph(ro, rd, SP1, SR1); if(t1 < t){ t = t1; n = normalize(ro + rd*t - SP1); alb = vec3(.95); mat = 1; }
+  float t2 = sph(ro, rd, SP2, SR2); if(t2 < t){ t = t2; n = normalize(ro + rd*t - SP2); alb = vec3(.75); mat = 0; }
+  return t;
+}
+bool occluded(vec3 ro, vec3 rd, float maxT){
+  return sph(ro, rd, SP1, SR1) < maxT || sph(ro, rd, SP2, SR2) < maxT;
+}
+vec3 scene2(vec2 f){
+  vec2 p = (f - .5*R)/R.y;
+  vec3 acc = vec3(0);
+  const vec3 LE = vec3(17., 12., 4.) * .9;
+  for(int s=0;s<8;s++){
+    if(float(s) >= SPP) break;
+    seed = uint(f.x) * 1973u + uint(f.y) * 9277u + uint(T*24.) * 26699u + uint(s) * 104729u;
+    vec2 j = (vec2(rnd(), rnd()) - .5)/R.y;
+    vec3 ro = vec3(0,0,3.35), rd = normalize(vec3(p + j, -1.25));
+    vec3 thr = vec3(1), L = vec3(0);
+    bool spec = true;
+    for(int k=0;k<4;k++){
+      vec3 n, alb; int mat;
+      float t = trace(ro, rd, n, alb, mat);
+      if(t > 1e8) break;
+      vec3 x = ro + rd*t;
+      if(mat == 2){ if(spec) L += thr*LE; break; }
+      if(mat == 1){
+        // the mirror sphere starts reflecting something that is not in the box
+        if(AI > .55 && k == 0){
+          vec2 q = (n.xy)*vec2(1.25, 1.25);
+          L += thr * eye(q, 0.) * smoothstep(.55, .85, AI) * 1.4;
+          thr *= 1. - smoothstep(.55, .85, AI);
+        }
+        ro = x + n*1e-3; rd = reflect(rd, n); thr *= alb; spec = true; continue;
+      }
+      // next event estimation on the ceiling light
+      vec3 lp = vec3((rnd()-.5)*.56, .999, (rnd()-.5)*.56);
+      vec3 ld = lp - x; float d2 = dot(ld, ld); ld /= sqrt(d2);
+      float cosL = max(ld.y, 0.), cosS = max(dot(n, ld), 0.);   // light faces down, ld points up
+      if(cosS > 0. && cosL > 0. && !occluded(x + n*1e-3, ld, sqrt(d2)))
+        L += thr * alb/PI * LE * cosS * cosL * (.56*.56) / d2;
+      ro = x + n*1e-3; rd = cosDir(n); thr *= alb; spec = false;
+    }
+    acc += L;
+  }
+  return acc / max(SPP, 1.);
+}
+
+// --------------------------------------------------------------- 3: BRDF chart
+vec3 env(vec3 d){
+  vec3 c = vec3(.012,.012,.018) + vec3(.03,.03,.05)*max(d.y,0.);
+  c += vec3(1.)*smoothstep(.97,.99, abs(d.x*.8+d.y*.6))*1.4;
+  c += vec3(1.)*smoothstep(.93,.96, d.y)*2.;
+  c += vec3(1.,.3,.2)*pow(max(0.,-d.x),6.)*.8;
+  c += vec3(.2,.6,1.)*pow(max(0., d.x),6.)*.8;
+  return c;
+}
+vec3 ggx(vec3 n, vec3 v, vec3 l, float a, vec3 F0){
+  vec3 h = normalize(v + l);
+  float nl = max(dot(n,l),0.), nv = max(dot(n,v),1e-3), nh = max(dot(n,h),0.), vh = max(dot(v,h),0.);
+  float a2 = a*a*a*a, dd = nh*nh*(a2 - 1.) + 1.;
+  float D = a2/(PI*dd*dd);
+  float k = (a+1.)*(a+1.)/8.;
+  float G = nl/(nl*(1.-k)+k) * nv/(nv*(1.-k)+k);
+  vec3 F = F0 + (1. - F0)*pow(1. - vh, 5.);
+  return D*F*G/(4.*nl*nv + 1e-4) * nl;
+}
+vec3 mlp(vec3 n, vec3 v, vec2 lat, float id){
+  // a tiny random 2-layer MLP; its weights drift as if still training
+  float x[6] = float[6](n.x, n.y, n.z, dot(n,v), lat.x, lat.y);
+  vec3 outc = vec3(0);
+  for(int j=0;j<8;j++){
+    float hsum = 0.;
+    for(int i=0;i<6;i++) hsum += (h1(float(i*13+j*7) + id*3.1) - .5) * 5. * x[i];
+    hsum += sin(T*1.3 + float(j) + id)*.6;
+    float hid = max(hsum, 0.);
+    outc += hid * (vec3(h1(float(j)*2.1+id), h1(float(j)*5.3+id+1.), h1(float(j)*7.7+id+2.)) - .35);
+  }
+  return 1./(1. + exp(-outc*1.6));
+}
+vec3 scene3(vec2 f){
+  vec2 p = (f - .5*R)/R.y;
+  vec3 ro = vec3(0,.15,6.), rd = normalize(vec3(p, -1.9));
+  vec3 col = vec3(.015,.015,.02) + vec3(.04,.03,.05)*smoothstep(-.6,.3,-p.y);
+  float best = 1e9; vec3 bn; float bid = -1.;
+  for(int i=0;i<5;i++){
+    vec3 c = vec3(-2.2 + float(i)*1.1, 0., 0.);
+    float t = sph(ro, rd, c, .45);
+    if(t < best){ best = t; bn = normalize(ro + rd*t - c); bid = float(i); }
+  }
+  // floor shadowing
+  float fl = (-.47 - ro.y)/rd.y;
+  if(fl > 0. && fl < best){
+    vec3 x = ro + rd*fl;
+    float ao = 1.;
+    for(int i=0;i<5;i++) ao *= smoothstep(.2, .9, length(x.xz - vec2(-2.2 + float(i)*1.1, 0.)));
+    col = vec3(.03,.03,.04)*ao*exp(-abs(x.z)*.3);
+  }
+  if(best < 1e8){
+    vec3 v = -rd, l = normalize(vec3(-.5,.8,.6));
+    float a = .06 + bid*.2;
+    vec3 base = vec3(.95,.64,.54);                       // copper-ish metal
+    vec3 r = reflect(rd, bn);
+    vec3 ana = ggx(bn, v, l, a, base)*3. + env(mix(r, bn, a*a))*base*mix(1., .35, a);
+    // infection runs left to right
+    float inf = smoothstep(bid*.14, bid*.14 + .25, AI);
+    vec2 lat = floor(bn.xy*mix(40., 6., inf))/6.;         // coarse latent texels
+    vec3 neu = pow(mlp(bn, v, lat, bid), vec3(3.)) * (.8 + .4*sin(T*4. + bid)) + env(r)*.12;
+    col = mix(ana, neu, inf);
+  }
+  return col;
+}
+
+// --------------------------------------------------------------- 4: cliffs, Nanite view
+float hgt(vec2 x){ float r = 1. - abs(gnoise(vec3(x*.45, 1.))); return 1.5*fbm(vec3(x*.3, 0.)) + .9*r*r - .5; }
+vec3 scene4(vec2 f){
+  vec2 p = (f - .5*R)/R.y;
+  float z = LT*.7;
+  vec3 ro = vec3(.3*sin(LT*.2), 1.35, -z), rd = normalize(vec3(p.x, p.y - .25, -1.5));
+  float t = .2; bool hit = false;
+  for(int i=0;i<110;i++){
+    vec3 x = ro + rd*t; float d = x.y - hgt(x.xz);
+    if(d < .002*t){ hit = true; break; }
+    t += d*.45; if(t > 28.) break;
+  }
+  vec3 sky = mix(vec3(.55,.36,.26), vec3(.05,.06,.1), clamp(p.y*2.2+.25, 0., 1.));
+  if(!hit) return sky;
+  vec3 x = ro + rd*t;
+  vec2 e = vec2(.02, 0);
+  vec3 n = normalize(vec3(hgt(x.xz - e.xy) - hgt(x.xz + e.xy), 2.*e.x, hgt(x.xz - e.yx) - hgt(x.xz + e.yx)));
+  vec3 sun = normalize(vec3(.7,.28,-.5));
+  vec3 alb = mix(vec3(.13,.11,.1), vec3(.3,.26,.22), fbm(x*3.)*.5+.5);
+  vec3 beauty = alb*(max(dot(n, sun), 0.)*vec3(2.6,1.9,1.3) + vec3(.1,.12,.16)*(.5+.5*n.y));
+  beauty = mix(beauty, sky, 1. - exp(-t*.045));
+  // Nanite visualisation: clusters coloured by id, cluster size grows with distance (LOD)
+  float lod = exp2(floor(log2(max(t, 1.)*1.2)));
+  vec3 q = x*4./lod;
+  vec3 cell = floor(q);
+  vec3 cc = .5 + .5*cos(TAU*(h1(dot(cell, vec3(1.,57.,113.)))*1.7 + vec3(0,.33,.67)));
+  vec2 tri = fract(vec2(q.x + q.z*.577, q.z*1.155));
+  float wire = min(min(tri.x, tri.y), abs(1. - tri.x - tri.y));
+  vec3 nan = cc*(.35 + .65*max(dot(n, sun), 0.));
+  nan *= mix(.45, 1., smoothstep(.0, .06*lod/1.2, wire));
+  float wipe = smoothstep(-.02, .02, f.x/R.x - clamp((LT - 1.5)/1.6, 0., 1.1));
+  return mix(nan, beauty, wipe);
+}
+
+void main(){
+  vec2 f = uv*R;
+  vec3 c = vec3(0);
+  if(SC == 1.) c = scene1(f);
+  else if(SC == 2.) c = scene2(f);
+  else if(SC == 3.) c = scene3(f);
+  else if(SC == 4.) c = scene4(f);
+  else if(SC == 5.){ vec2 q = (f - .5*R)/R.y*1.2; c = eye(q, 1.) * AI; }
+  o = vec4(c, 1.);
+}`;
+
+const POST = HEAD + `
+uniform sampler2D SRC, TXT;
+uniform float PM, DS, SP;
+vec3 tone(vec3 c){ c = max(c,0.); return c*(2.51*c+.03)/(c*(2.43*c+.59)+.14); }
+vec3 smp(vec2 u){ return texture(SRC, u).rgb; }
+// edge-aware blur standing in for the learned denoiser
+vec3 denoise(vec2 u, float rad){
+  vec3 c0 = smp(u), s = vec3(0); float w = 0.;
+  for(int y=-3;y<=3;y++) for(int x=-3;x<=3;x++){
+    vec2 o = vec2(x,y)*rad/R;
+    vec3 c = smp(u + o);
+    float k = exp(-float(x*x+y*y)/8.) * exp(-dot(c - c0, c - c0)*mix(2., .05, clamp(rad/9., 0., 1.)));
+    s += c*k; w += k;
+  }
+  return s/w;
+}
+// screen-space Gaussian splats: every cell becomes an oriented, soft ellipse; some drift away
+vec3 splats(vec2 f, float amt){
+  float cs = 9.;
+  vec2 g = floor(f/cs);
+  vec3 acc = vec3(0); float wsum = 0.;
+  for(int y=-2;y<=2;y++) for(int x=-2;x<=2;x++){
+    vec2 id = g + vec2(x,y);
+    float r1 = h2(id), r2 = h2(id + 7.7), r3 = h2(id + 3.3);
+    vec2 center = (id + .5)*cs;
+    bool floater = r3 > .9;
+    vec2 c = center + (floater ? (vec2(r1, r2) - .5)*cs*2.*amt : vec2(0));
+    vec3 col = smp((floater ? center + (vec2(r2, r1) - .5)*amt*amt*220. : center)/R);
+    vec2 d = rot(r1*TAU)*(f - c);
+    d /= vec2(mix(1., 2.4, r2), mix(1., .6, r2)) * cs * mix(.5, 1.2, amt) * (floater ? 1. + amt*.8 : 1.);
+    float w = exp(-dot(d,d)*2.);
+    acc += col*w; wsum += w;
+  }
+  return acc/max(wsum, 1e-3);
+}
+void main(){
+  vec2 f = uv*R, u = uv;
+  float fs = floor(S*13.);
+  float band = floor(f.y / mix(4., 38., h1(floor(f.y/41.)+fs)));
+  if(h1(band + fs*1.7) < B*.32) u.x += (h1(band*3.1+fs) - .5)*.3*B;
+  vec2 blk = floor(f/mix(24., 48., h1(floor(S*7.))));
+  if(h2(blk + fs) < B*.16) u += (vec2(h2(blk+3.1+fs), h2(blk+7.7+fs)) - .5)*vec2(.2,.1)*B;
+  bool mosh = h2(blk*1.3 + fs + 5.) < B*.14;
+  if(mosh) u = (floor(u*R/8.)*8. + 4.)/R;
+
+  vec3 col;
+  if(PM == 2. && u.x < DS) col = denoise(u, SP);
+  else if(PM == 4. && SP > 0.) col = splats(u*R, SP);
+  else {
+    float ca = .0012 + .016*B*B;
+    col = vec3(smp(u + vec2(ca,0)).r, smp(u).g, smp(u - vec2(ca,0)).b);
+  }
+  if(PM == 2. && abs(u.x - DS) < .002) col += vec3(2., .1, .3);   // the denoiser's scan line
+  if(h1(floor(f.y/3.) + fs*.37) < B*.22){
+    for(int k=1;k<12;k++){
+      vec3 c2 = smp(u - vec2(float(k)*.006*B, 0.));
+      if(dot(c2, vec3(.3,.59,.11)) > dot(col, vec3(.3,.59,.11))) col = c2;
+    }
+  }
+  if(mosh) col = floor(col*4.)/4.;
+  col = tone(col*1.1);
+  vec4 tx = texture(TXT, vec2(u.x, 1. - u.y));
+  col = mix(col, tx.rgb, tx.a);
+  col *= .92 + .08*sin(f.y*3.14159);
+  vec2 v = uv - .5; col *= 1. - dot(v*vec2(.8,1.2), v*vec2(.8,1.2));
+  col += (h2(f + fs + T) - .5)*(.025 + .05*B);
+  if(B > .9 && h1(fs) < .5) col = 1. - col;
+  o = vec4(pow(clamp(col,0.,1.), vec3(1./2.2)), 1.);
+}`;
+
+function program(fs) {
+  const p = gl.createProgram();
+  for (const [t, src] of [[gl.VERTEX_SHADER, VS], [gl.FRAGMENT_SHADER, fs]]) {
+    const s = gl.createShader(t); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    gl.attachShader(p, s);
+  }
+  gl.bindAttribLocation(p, 0, "p"); gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const cache = {};
+  p.u = (n) => cache[n] ??= gl.getUniformLocation(p, n);
+  return p;
+}
+const scene = program(SCENE), post = program(POST);
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+function tex(ifmt, fmt, type) {
+  const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, ifmt, W, H, 0, fmt, type, null);
+  for (const k of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, k, gl.LINEAR);
+  for (const k of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D, k, gl.CLAMP_TO_EDGE);
+  return t;
+}
+const sceneTex = tex(gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT), txtTex = tex(gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE);
+const fbo = gl.createFramebuffer();
+gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, sceneTex, 0);
+
+// ------------------------------------------------------------------ timeline + events
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const smooth = (x) => { x = clamp(x); return x * x * (3 - 2 * x); };
+function rng(seed) { return () => (seed = (seed * 16807) % 2147483647) / 2147483647; }
+const sceneAt = (t) => TL.scenes.find((s) => t >= s.start && t < s.end) ?? TL.scenes.at(-1);
+
+// bursts: scene cuts, each breach, jittery aftershocks while the AI runs, the shout, the outro eye
+const BURSTS = [];
+{
+  const r = rng(4242);
+  for (const s of TL.scenes) {
+    if (s.start > 0) BURSTS.push({ t: s.start - 0.12, d: 0.3, p: 0.85 });
+    if (s.breach) {
+      BURSTS.push({ t: s.breach, d: 0.9, p: 1 });
+      for (let t = s.breach + 1.2; t < s.end - 2.8; t += 0.5 + r() * 0.9) BURSTS.push({ t, d: 0.12 + r() * 0.25, p: 0.25 + r() * 0.4 });
+      BURSTS.push({ t: s.end - 2.4, d: 0.35, p: 0.9 });
+    }
+  }
+  BURSTS.push({ t: 56.2, d: 0.5, p: 0.9 }, { t: 57.9, d: 0.25, p: 1 });
+}
+const burstAt = (t) => {
+  let b = 0;
+  for (const e of BURSTS) if (t >= e.t && t < e.t + e.d) b = Math.max(b, e.p * Math.sqrt(Math.sin((Math.PI * (t - e.t)) / e.d)));
+  return b;
+};
+
+// typed text (terminal logs + boot + outro): one entry per line, used for audio clicks too
+const TYPED = [];
+const CPS = 34;
+TL.scenes.filter((s) => s.log).forEach((s) => s.log.forEach((line, i) => TYPED.push({ t: s.breach + 0.5 + i * 1.15, text: line, scene: s.id })));
+["SIGGRAPH ARCHIVE  1974 — 2026", "INDEXING 50 YEARS OF PAPERS", "PLAYBACK: NOMINAL"].forEach((line, i) => TYPED.push({ t: 0.4 + i * 1.05, text: line, scene: 0 }));
+TL.outro.forEach((line, i) => TYPED.push({ t: 52.4 + i * 1.25, text: line, scene: 5, serif: true }));
+const typed = (e, t) => e.text.slice(0, clamp(Math.floor((t - e.t) * CPS), 0, e.text.length));
+
+window.EVENTS = { bursts: BURSTS, typed: TYPED.map((e) => ({ t: e.t, n: e.text.length, cps: CPS })), scenes: TL.scenes, fps: FPS, frames: FRAMES };
+
+function aiAt(s, t) {
+  if (s.id === 5) return smooth((t - 55.4) / 1.2) * (t < 57.9 ? 1 : 0);
+  if (!s.breach) return 0;
+  return clamp((t - s.breach - 0.4) / (s.end - s.breach - 1.2));
+}
+
+// ------------------------------------------------------------------ typography
+const tc = document.createElement("canvas"); tc.width = W; tc.height = H;
+const cx = tc.getContext("2d");
+const HOT = "#ff2e63", PAPER = "#ecebe6", DIM = "rgba(236,235,230,.55)";
+const GLY = "█▓▒░<>/\\=+*#%&$@01";
+function scramble(str, amount, r) { return str.split("").map((c) => (c !== " " && r() < amount ? GLY[(r() * GLY.length) | 0] : c)).join(""); }
+
+function drawText(t, frame, s, ai, burst) {
+  const r = rng(frame * 7919 + 1);
+  cx.clearRect(0, 0, W, H);
+  cx.textBaseline = "alphabetic";
+  const m = 34;
+  const tcode = (x) => { const f = Math.floor(x * FPS); return [0, Math.floor(x / 60), Math.floor(x) % 60, f % FPS].map((n) => String(n).padStart(2, "0")).join(":"); };
+
+  // header
+  if (s.id >= 1 && s.id <= 4) {
+    cx.font = "500 11px Mono"; cx.fillStyle = DIM;
+    cx.fillText("SIGGRAPH ARCHIVE — PLAYBACK", m, m);
+    cx.textAlign = "right";
+    cx.fillStyle = ai > 0 ? HOT : DIM;
+    cx.fillText(ai > 0 ? `● INTRUSION  ${tcode(t)}` : `TC ${tcode(t)}`, W - m, m);
+    cx.textAlign = "left";
+  }
+
+  // boot
+  if (s.id === 0) {
+    cx.font = "500 13px Mono"; cx.fillStyle = PAPER;
+    TYPED.filter((e) => e.scene === 0 && t >= e.t).forEach((e, i) => cx.fillText(typed(e, t) + (i === 2 && Math.floor(t * 3) % 2 ? " _" : ""), m * 2, H / 2 - 24 + i * 22));
+    return;
+  }
+
+  // chapters
+  if (s.id >= 1 && s.id <= 4) {
+    const since = t - s.start, breached = t >= s.breach;
+    const alpha = smooth(since / 0.8);
+    cx.globalAlpha = alpha;
+    cx.font = "500 11px Mono"; cx.fillStyle = breached ? HOT : DIM;
+    cx.fillText(s.chapter.toUpperCase(), m, H - m - 78);
+    const title = breached ? scramble(s.ai.title, clamp(1 - (t - s.breach) * 1.5) + burst * 0.3, r) : s.calm.title;
+    cx.font = `${breached ? "italic " : ""}400 58px Serif`;
+    cx.fillStyle = breached ? HOT : PAPER;
+    cx.fillText(title, m - 2, H - m - 26);
+    cx.font = "500 11px Mono"; cx.fillStyle = breached ? "rgba(255,46,99,.85)" : DIM;
+    cx.fillText(breached ? scramble(s.ai.cite, clamp(1 - (t - s.breach) * 1.2), r) : s.calm.cite, m, H - m);
+    cx.globalAlpha = 1;
+
+    // terminal log
+    cx.font = "500 12px Mono";
+    TYPED.filter((e) => e.scene === s.id && t >= e.t).forEach((e, i) => {
+      cx.fillStyle = e.text.startsWith("!") ? HOT : "rgba(255,120,150,.9)";
+      cx.fillText(typed(e, t), m, m + 30 + i * 18);
+    });
+
+    // per-scene instruments
+    cx.font = "500 11px Mono"; cx.textAlign = "right"; cx.fillStyle = breached ? HOT : DIM;
+    if (s.id === 1) cx.fillText(breached ? `DIFFUSION STEP t = ${String(Math.round(ai < 0.46 ? ai / 0.46 * 1000 : (1 - (ai - 0.46) / 0.54) * 1000)).padStart(4, "0")}` : "TURBULENCE · 5 OCTAVES", W - m, m + 18);
+    if (s.id === 2) cx.fillText(breached ? "SPP 1 · DENOISED" : `SPP ${sppAt(s, t)}`, W - m, m + 18);
+    if (s.id === 3) {
+      cx.fillText(breached ? "LATENT 8 CH · MLP 64×64" : "GGX · SMITH · SCHLICK", W - m, m + 18);
+      cx.textAlign = "center"; cx.font = "500 10px Mono";
+      for (let i = 0; i < 5; i++) {
+        const x = W / 2 + (-2.2 + i * 1.1) * (H / 1.9 / 6) * 1.9 * 0.98;
+        const inf = smooth((ai - i * 0.14) / 0.25);
+        cx.fillStyle = inf > 0.5 ? HOT : DIM;
+        cx.fillText(inf > 0.5 ? scramble("α = ?.??", 0.5, r) : `α = ${(0.06 + i * 0.2).toFixed(2)}`, x, H / 2 + 62);
+      }
+      cx.textAlign = "right";
+      cx.font = "italic 400 26px Serif"; cx.fillStyle = breached ? HOT : PAPER;
+      cx.fillText(breached ? scramble("f = D F G / 4 (n·l)(n·v)", clamp(0.2 + ai), r) : "f = D F G / 4 (n·l)(n·v)", W - m, m + 56);
+    }
+    if (s.id === 4) cx.fillText(breached ? `GAUSSIANS ${(Math.floor(3102544 * clamp(ai * 1.5))).toLocaleString("en-US")}` : t - s.start > 1.5 ? "VIEW MODE: CLUSTERS · LOD BY DISTANCE" : "VIEW MODE: LIT", W - m, m + 18);
+    cx.textAlign = "left";
+
+    // shout
+    const st = t - (s.end - 2.4);
+    if (st > 0 && st < 1.9 && Math.floor(st * 12) % 5 !== 0) {
+      cx.font = "900 34px Unbounded"; cx.textAlign = "center"; cx.fillStyle = HOT;
+      cx.fillText(scramble(s.shout, 0.08 + burst * 0.3, r), W / 2 + (r() - 0.5) * 12 * burst, H / 2 + 12);
+      cx.textAlign = "left";
+    }
+  }
+
+  // outro
+  if (s.id === 5) {
+    const lines = TYPED.filter((e) => e.scene === 5 && t >= e.t);
+    if (t < 57.9) {
+      cx.font = "italic 400 40px Serif"; cx.fillStyle = PAPER; cx.textAlign = "center";
+      const fade = 1 - smooth((t - 55.2) / 0.8);
+      cx.globalAlpha = fade;
+      lines.forEach((e, i) => { cx.fillStyle = i === 2 ? HOT : PAPER; cx.fillText(typed(e, t), W / 2, H / 2 - 40 + i * 46); });
+      cx.globalAlpha = 1;
+    } else {
+      cx.textAlign = "center";
+      cx.font = "500 12px Mono"; cx.fillStyle = DIM; cx.fillText("NOTE 01 — INTRUSION", W / 2, H / 2 - 30);
+      cx.font = "900 44px Unbounded"; cx.fillStyle = PAPER; cx.fillText("SkinkEBravia", W / 2, H / 2 + 22);
+    }
+    cx.textAlign = "left";
+  }
+}
+
+function sppAt(s, t) { return [1, 2, 4, 8][clamp(Math.floor((t - s.start) / 1.3), 0, 3)]; }
+
+// ------------------------------------------------------------------ render
+function render(frame) {
+  const t = frame / FPS;
+  const s = sceneAt(t);
+  const ai = aiAt(s, t);
+  const burst = burstAt(t);
+  drawText(t, frame, s, ai, burst);
+  gl.bindTexture(gl.TEXTURE_2D, txtTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, tc);
+
+  let spp = 1, pm = 0, ds = 0, sp = 0;
+  if (s.id === 2) { spp = t < s.breach ? sppAt(s, t) : 1; pm = 2; ds = t < s.breach ? -1 : smooth((t - s.breach - 0.3) / 1.6) * 1.05; sp = 1.2 + 9 * smooth((ai - 0.35) / 0.6); }
+  if (s.id === 4) { pm = 4; sp = t < s.breach ? 0 : clamp(0.25 + ai); }
+
+  const common = (p) => {
+    gl.uniform2f(p.u("R"), W, H); gl.uniform1f(p.u("T"), t); gl.uniform1f(p.u("LT"), t - s.start);
+    gl.uniform1f(p.u("AI"), ai); gl.uniform1f(p.u("B"), burst); gl.uniform1f(p.u("S"), Math.floor(frame / 2) + 0.5);
+    gl.uniform1f(p.u("SC"), s.id); gl.uniform1f(p.u("SPP"), spp);
+  };
+  gl.viewport(0, 0, W, H);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.useProgram(scene); common(scene);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.useProgram(post); common(post);
+  gl.uniform1f(post.u("PM"), pm); gl.uniform1f(post.u("DS"), ds); gl.uniform1f(post.u("SP"), sp);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, sceneTex); gl.uniform1i(post.u("SRC"), 0);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, txtTex); gl.uniform1i(post.u("TXT"), 1);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.activeTexture(gl.TEXTURE0);
+}
+
+window.renderFrame = (f) => { render(f); gl.finish(); return canvas.toDataURL("image/jpeg", 0.95); };
+await Promise.all(["900 20px Unbounded", "400 20px Serif", "italic 400 20px Serif", "500 12px Mono"].map((f) => document.fonts.load(f)));
+window.ready = true;
+if (!location.search.includes("capture")) {
+  const t0 = performance.now();
+  const loop = () => { render(Math.floor(((performance.now() - t0) / 1000) * FPS) % FRAMES); requestAnimationFrame(loop); };
+  loop();
+}
+</script>
+</body>
+</html>

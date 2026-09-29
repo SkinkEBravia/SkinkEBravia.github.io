@@ -1,0 +1,41 @@
+{
+  "fps": 24,
+  "duration": 60,
+  "scenes": [
+    { "id": 0, "start": 0,  "end": 4,  "name": "boot" },
+    {
+      "id": 1, "start": 4, "end": 16, "breach": 9.2,
+      "chapter": "01 / Texture",
+      "calm": { "title": "Procedural noise", "cite": "Ken Perlin — An Image Synthesizer — SIGGRAPH 1985" },
+      "ai": { "title": "Diffusion", "cite": "Ho, Jain & Abbeel — Denoising Diffusion Probabilistic Models — NeurIPS 2020" },
+      "log": ["> attach diffusion_unet.pt", "> q(x_t | x_0): destroying structure", "> p(x_0 | x_t): 1000 steps, reversing", "! it learned to run noise backwards"],
+      "shout": "IT LEARNED TO RUN NOISE BACKWARDS"
+    },
+    {
+      "id": 2, "start": 16, "end": 28, "breach": 21.2,
+      "chapter": "02 / Light transport",
+      "calm": { "title": "Path tracing", "cite": "James T. Kajiya — The Rendering Equation — SIGGRAPH 1986" },
+      "ai": { "title": "Learned denoising", "cite": "Bako et al. — Kernel-Predicting Convolutional Networks for Denoising Monte Carlo Renderings — SIGGRAPH 2017" },
+      "log": ["> hook integrator.radiance()", "> spp budget: 1", "> kpcn.forward(noisy, albedo, normal)", "! detail classified as noise"],
+      "shout": "WHY TRACE LIGHT WHEN YOU CAN GUESS IT"
+    },
+    {
+      "id": 3, "start": 28, "end": 40, "breach": 33.2,
+      "chapter": "03 / Materials",
+      "calm": { "title": "Microfacet BRDF", "cite": "Cook & Torrance — A Reflectance Model for Computer Graphics — SIGGRAPH 1981" },
+      "ai": { "title": "Neural appearance", "cite": "Zeltner et al. — Real-Time Neural Appearance Models — ACM TOG 2024" },
+      "log": ["> unlink D * F * G / (4 n.l n.v)", "> latent texture: 8 channels", "> mlp(64, 64) -> rgb", "! the formula is gone"],
+      "shout": "THE FORMULA IS GONE. ONLY WEIGHTS REMAIN"
+    },
+    {
+      "id": 4, "start": 40, "end": 52, "breach": 45.2,
+      "chapter": "04 / Geometry",
+      "calm": { "title": "Virtualized geometry", "cite": "Karis, Stubbe & Wihlidal — Nanite: A Deep Dive — SIGGRAPH 2021 Advances Course" },
+      "ai": { "title": "Gaussian splatting", "cite": "Kerbl, Kopanas, Leimkühler & Drettakis — 3D Gaussian Splatting — SIGGRAPH 2023" },
+      "log": ["> drop index_buffer", "> densify: 3,102,544 gaussians", "> rasterize(splats) // no triangles", "! floaters detected: ignoring"],
+      "shout": "NO TRIANGLES WERE HARMED. NONE WERE NEEDED"
+    },
+    { "id": 5, "start": 52, "end": 60, "name": "outro" }
+  ],
+  "outro": ["Every equation we wrote down,", "it learned to imitate.", "The renderer is dreaming now."]
+}

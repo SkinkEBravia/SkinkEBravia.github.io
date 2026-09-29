@@ -1,0 +1,49 @@
+---
+title: "Intrusion: when the renderer started dreaming"
+description: "A one-minute film about four SIGGRAPH techniques and the learned models that now stand in for them."
+date: 2026-09-29
+topic: "AI × Graphics"
+---
+
+<figure>
+  <video src="/media/note-01-intrusion.mp4" poster="/media/note-01-intrusion.jpg" controls playsinline preload="metadata"></video>
+  <figcaption>Note 01 · Intrusion · 60 s · sound on</figcaption>
+</figure>
+
+For fifty years, computer graphics wrote things down. Noise got a formula. Light got an integral.
+Materials got a microfacet distribution. Geometry got an index buffer. Each of these was a
+statement about the world that you could read, prove and debug.
+
+In the last decade, each of them acquired a learned twin that skips the statement and goes straight
+to the picture. The film plays four of these pairs. Each chapter starts as a calm archive recording
+of the classical technique, then the counterpart breaks in.
+
+| Chapter | Written down | Learned |
+|---|---|---|
+| Texture | Perlin, *An Image Synthesizer*, SIGGRAPH 1985 | Ho, Jain & Abbeel, *Denoising Diffusion Probabilistic Models*, NeurIPS 2020 |
+| Light transport | Kajiya, *The Rendering Equation*, SIGGRAPH 1986 | Bako et al., *Kernel-Predicting Convolutional Networks for Denoising Monte Carlo Renderings*, SIGGRAPH 2017 |
+| Materials | Cook & Torrance, *A Reflectance Model for Computer Graphics*, SIGGRAPH 1981 | Zeltner et al., *Real-Time Neural Appearance Models*, ACM TOG 2024 |
+| Geometry | Karis, Stubbe & Wihlidal, *Nanite: A Deep Dive*, SIGGRAPH 2021 course | Kerbl et al., *3D Gaussian Splatting for Real-Time Radiance Field Rendering*, SIGGRAPH 2023 |
+
+## Why horror
+
+The irony that interests me is in the first chapter. Procedural noise was graphics' way of faking
+nature's detail on purpose. Diffusion models are trained to *remove* noise, and they turn out to
+make pictures by running that removal backwards from pure static. The same noise that Perlin
+tamed is now the raw material.
+
+The honest version is less dramatic: every learned counterpart in the table was built by graphics
+researchers, trained on renders made with the classical method, and is judged against it. The
+denoiser needs the path tracer. The splats are optimised against photographs through a
+rasteriser. The formula is not gone; it moved into the training loop. But the part you can read is
+shrinking, and that is worth a minute of unease.
+
+## How the film is made
+
+Everything is procedural and rendered in the browser:
+
+- **Perlin marble**: 3D gradient noise with Perlin's quintic fade, turbulence driving $\sin(x + k\,\mathrm{turb}(\mathbf{p}))$. The diffusion chapter applies the forward process $x_t = \sqrt{\bar\alpha_t}\,x_0 + \sqrt{1-\bar\alpha_t}\,\epsilon$ to the frame, then "reverses" to a different $x_0$.
+- **Cornell box**: a real Monte Carlo path tracer with next-event estimation, shown at 1 to 8 samples per pixel. The "denoiser" is an edge-aware filter, not a network; its over-smoothing is deliberate.
+- **BRDF chart**: GGX distribution, Smith geometry term and Schlick Fresnel at five roughness values. The neural phase replaces the formula with a tiny random MLP over a coarse latent grid.
+- **Cliffs**: a ray-marched height field, then a cluster view whose cluster size doubles with distance, the way Nanite's LOD visualisation looks. The splat phase re-draws the frame as oriented screen-space Gaussians, with floaters.
+- **Sound**: synthesised from the same event list as the picture, so every glitch and keystroke lines up.
