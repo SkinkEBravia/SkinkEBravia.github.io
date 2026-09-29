@@ -1,41 +1,105 @@
 {
   "fps": 24,
   "duration": 60,
-  "scenes": [
-    { "id": 0, "start": 0,  "end": 4,  "name": "boot" },
+  "boot": {
+    "start": 0, "end": 2.5,
+    "lines": ["SIGGRAPH ARCHIVE · 1981 — 2024", "RECONSTRUCTING ONE LANDSCAPE BY HAND", "PLAYBACK: NOMINAL"]
+  },
+  "chapters": [
     {
-      "id": 1, "start": 4, "end": 16, "breach": 9.2,
-      "chapter": "01 / Texture",
-      "calm": { "title": "Procedural noise", "cite": "Ken Perlin — An Image Synthesizer — SIGGRAPH 1985" },
-      "ai": { "title": "Diffusion", "cite": "Ho, Jain & Abbeel — Denoising Diffusion Probabilistic Models — NeurIPS 2020" },
-      "log": ["> attach diffusion_unet.pt", "> q(x_t | x_0): destroying structure", "> p(x_0 | x_t): 1000 steps, reversing", "! it learned to run noise backwards"],
-      "shout": "IT LEARNED TO RUN NOISE BACKWARDS"
+      "id": 1, "key": "noise", "start": 2.5, "end": 18.0, "breach": 11.0,
+      "label": "01 / NOISE",
+      "calm": {
+        "title": "Procedural noise",
+        "cite": ["Ken Perlin — An Image Synthesizer — SIGGRAPH 1985"],
+        "formula": "h(x) = Σ_i 2^{−i} noise(2^i x)"
+      },
+      "ai": {
+        "title": "Diffusion",
+        "cite": ["Ho, Jain & Abbeel — Denoising Diffusion Probabilistic Models — NeurIPS 2020",
+                 "Song et al. — Score-Based Generative Modeling through SDEs — ICLR 2021"],
+        "formula": "s_θ(x, t) ≈ ∇_x log p_t(x)"
+      },
+      "shots": [
+        { "kind": "lattice", "start": 2.5, "end": 4.4 },
+        { "kind": "octaves", "start": 4.4, "end": 6.4 },
+        { "kind": "rise", "start": 6.4, "end": 8.6 },
+        { "kind": "dawn", "start": 8.6, "end": 11.35 },
+        { "kind": "sig-samples", "start": 11.35, "end": 12.85, "signal": true },
+        { "kind": "sig-sde", "start": 12.85, "end": 14.25, "signal": true },
+        { "kind": "latent", "start": 14.25, "end": 18.0 }
+      ],
+      "log": ["> x_T ~ N(0, I)", "> for t = 1000…1: x += σ²∇log p(x) + σz", "> latent 64×64×4 · fitting", "! no rule for mountains. only p(mountains)"],
+      "shout": ["NO RULE FOR MOUNTAINS.", "ONLY A DISTRIBUTION."], "shoutAt": 16.2
     },
     {
-      "id": 2, "start": 16, "end": 28, "breach": 21.2,
-      "chapter": "02 / Light transport",
-      "calm": { "title": "Path tracing", "cite": "James T. Kajiya — The Rendering Equation — SIGGRAPH 1986" },
-      "ai": { "title": "Learned denoising", "cite": "Bako et al. — Kernel-Predicting Convolutional Networks for Denoising Monte Carlo Renderings — SIGGRAPH 2017" },
-      "log": ["> hook integrator.radiance()", "> spp budget: 1", "> kpcn.forward(noisy, albedo, normal)", "! detail classified as noise"],
-      "shout": "WHY TRACE LIGHT WHEN YOU CAN GUESS IT"
+      "id": 2, "key": "light", "start": 18.0, "end": 29.0, "breach": 23.2,
+      "label": "02 / LIGHT",
+      "calm": {
+        "title": "The rendering equation",
+        "cite": ["James T. Kajiya — The Rendering Equation — SIGGRAPH 1986"],
+        "formula": "L_o = L_e + ∫ f_r L_i cos θ dω"
+      },
+      "ai": {
+        "title": "Neural radiance caching",
+        "cite": ["Müller, Rousselle, Novák & Keller — Real-time Neural Radiance Caching", "for Path Tracing — ACM TOG 2021 (SIGGRAPH)"],
+        "formula": "L ≈ cache_θ(x_1, ω_1)"
+      },
+      "shots": [
+        { "kind": "paths", "start": 18.0, "end": 23.5 },
+        { "kind": "sig-cut", "start": 23.5, "end": 25.0, "signal": true },
+        { "kind": "cache", "start": 25.0, "end": 29.0 }
+      ],
+      "log": ["> depth ≥ 1: truncate path", "> L̂ = cache(x, ω, n, α)", "> few paths continue: train online", "! the rest of the light is inferred"],
+      "shout": ["IT STOPS FOLLOWING THE LIGHT.", "IT GUESSES THE REST."], "shoutAt": 27.2
     },
     {
-      "id": 3, "start": 28, "end": 40, "breach": 33.2,
-      "chapter": "03 / Materials",
-      "calm": { "title": "Microfacet BRDF", "cite": "Cook & Torrance — A Reflectance Model for Computer Graphics — SIGGRAPH 1981" },
-      "ai": { "title": "Neural appearance", "cite": "Zeltner et al. — Real-Time Neural Appearance Models — ACM TOG 2024" },
-      "log": ["> unlink D * F * G / (4 n.l n.v)", "> latent texture: 8 channels", "> mlp(64, 64) -> rgb", "! the formula is gone"],
-      "shout": "THE FORMULA IS GONE. ONLY WEIGHTS REMAIN"
+      "id": 3, "key": "material", "start": 29.0, "end": 40.0, "breach": 34.2,
+      "label": "03 / MATERIAL",
+      "calm": {
+        "title": "Microfacet reflectance",
+        "cite": ["Cook & Torrance — A Reflectance Model for Computer Graphics — SIGGRAPH 1981"],
+        "formula": "R_s = F D G / π (N·L)(N·V)"
+      },
+      "ai": {
+        "title": "Neural appearance",
+        "cite": ["Zeltner et al. — Real-Time Neural Appearance Models — ACM TOG 2024"],
+        "formula": "f ≈ MLP_θ(z(x), ω_i, ω_o)"
+      },
+      "shots": [
+        { "kind": "lobe", "start": 29.0, "end": 34.5 },
+        { "kind": "sig-weights", "start": 34.5, "end": 36.1, "signal": true },
+        { "kind": "neural", "start": 36.1, "end": 40.0 }
+      ],
+      "log": ["> unlink F·D·G / π(n·l)(n·v)", "> latent texture z(x): 8 ch", "> f = mlp(z, ω_i, ω_o)", "! no roughness. no fresnel. no m."],
+      "shout": ["NO FORMULA.", "ONLY WEIGHTS."], "shoutAt": 38.2
     },
     {
-      "id": 4, "start": 40, "end": 52, "breach": 45.2,
-      "chapter": "04 / Geometry",
-      "calm": { "title": "Virtualized geometry", "cite": "Karis, Stubbe & Wihlidal — Nanite: A Deep Dive — SIGGRAPH 2021 Advances Course" },
-      "ai": { "title": "Gaussian splatting", "cite": "Kerbl, Kopanas, Leimkühler & Drettakis — 3D Gaussian Splatting — SIGGRAPH 2023" },
-      "log": ["> drop index_buffer", "> densify: 3,102,544 gaussians", "> rasterize(splats) // no triangles", "! floaters detected: ignoring"],
-      "shout": "NO TRIANGLES WERE HARMED. NONE WERE NEEDED"
-    },
-    { "id": 5, "start": 52, "end": 60, "name": "outro" }
+      "id": 4, "key": "geometry", "start": 40.0, "end": 52.5, "breach": 45.2,
+      "label": "04 / GEOMETRY",
+      "calm": {
+        "title": "Virtualized geometry",
+        "cite": ["Karis, Stubbe & Wihlidal — Nanite: A Deep Dive — SIGGRAPH 2021 Advances course"],
+        "formula": "error(cluster) < 1 px"
+      },
+      "ai": {
+        "title": "Gaussian splatting",
+        "cite": ["Kerbl, Kopanas, Leimkühler & Drettakis — 3D Gaussian Splatting", "for Real-Time Radiance Field Rendering — SIGGRAPH 2023"],
+        "formula": "θ ← θ − η ∇_θ L(θ)"
+      },
+      "shots": [
+        { "kind": "mesh", "start": 40.0, "end": 45.5 },
+        { "kind": "sig-loss", "start": 45.5, "end": 47.4, "signal": true },
+        { "kind": "splats", "start": 47.4, "end": 49.4 },
+        { "kind": "sig-loss", "start": 49.4, "end": 49.75, "signal": true },
+        { "kind": "splats", "start": 49.75, "end": 52.5 }
+      ],
+      "log": ["> drop index_buffer", "> init gaussians ~ N(μ, σ²I)", "> densify every 100 it · prune α < 0.005", "! the mountains are a loss function now"],
+      "shout": ["THE MOUNTAINS ARE", "A LOSS FUNCTION NOW."], "shoutAt": 50.6
+    }
   ],
-  "outro": ["Every equation we wrote down,", "it learned to imitate.", "The renderer is dreaming now."]
+  "outro": {
+    "start": 52.5, "end": 60.0, "collapse": 56.8, "card": 57.9,
+    "lines": ["Every equation we wrote down,", "it learned to imitate.", "The renderer is dreaming now."]
+  }
 }

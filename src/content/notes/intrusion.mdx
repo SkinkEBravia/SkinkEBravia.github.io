@@ -1,6 +1,6 @@
 ---
 title: "Intrusion: when the renderer started dreaming"
-description: "A one-minute film about four SIGGRAPH techniques and the learned models that now stand in for them."
+description: "A one-minute film: one landscape built by hand from Perlin noise, then re-read four times by the learned way of thinking."
 date: 2026-09-29
 topic: "AI × Graphics"
 ---
@@ -10,40 +10,93 @@ topic: "AI × Graphics"
   <figcaption>Note 01 · Intrusion · 60 s · sound on</figcaption>
 </figure>
 
-For fifty years, computer graphics wrote things down. Noise got a formula. Light got an integral.
-Materials got a microfacet distribution. Geometry got an index buffer. Each of these was a
-statement about the world that you could read, prove and debug.
+The film builds one landscape the way graphics has built landscapes for forty years. It starts
+with a lattice of random gradients, then noise, octaves stacked at half the amplitude and twice
+the frequency, a heightfield that rises out of the grey image, clouds from a second fbm, and a sun.
+Each step is a rule that someone wrote down and that you can read.
 
-In the last decade, each of them acquired a learned twin that skips the statement and goes straight
-to the picture. The film plays four of these pairs. Each chapter starts as a calm archive recording
-of the classical technique, then the counterpart breaks in.
+Then a foreign signal cuts into the archive feed. It does not show a better picture. It shows a
+different way of thinking about the same picture: mountains as samples from a distribution, light
+as a guess from a cache, a reflectance formula as a weight matrix, geometry as the minimum of a loss.
+The landscape stays the same set for all four chapters. Only the reasoning behind it changes.
 
 | Chapter | Written down | Learned |
 |---|---|---|
-| Texture | Perlin, *An Image Synthesizer*, SIGGRAPH 1985 | Ho, Jain & Abbeel, *Denoising Diffusion Probabilistic Models*, NeurIPS 2020 |
-| Light transport | Kajiya, *The Rendering Equation*, SIGGRAPH 1986 | Bako et al., *Kernel-Predicting Convolutional Networks for Denoising Monte Carlo Renderings*, SIGGRAPH 2017 |
-| Materials | Cook & Torrance, *A Reflectance Model for Computer Graphics*, SIGGRAPH 1981 | Zeltner et al., *Real-Time Neural Appearance Models*, ACM TOG 2024 |
-| Geometry | Karis, Stubbe & Wihlidal, *Nanite: A Deep Dive*, SIGGRAPH 2021 course | Kerbl et al., *3D Gaussian Splatting for Real-Time Radiance Field Rendering*, SIGGRAPH 2023 |
+| Noise | Ken Perlin, *An Image Synthesizer*, SIGGRAPH 1985 | Ho, Jain & Abbeel, *Denoising Diffusion Probabilistic Models*, NeurIPS 2020; Song et al., *Score-Based Generative Modeling through Stochastic Differential Equations*, ICLR 2021 |
+| Light | James T. Kajiya, *The Rendering Equation*, SIGGRAPH 1986 | Müller, Rousselle, Novák & Keller, *Real-time Neural Radiance Caching for Path Tracing*, ACM TOG 40(4), SIGGRAPH 2021 |
+| Material | Cook & Torrance, *A Reflectance Model for Computer Graphics*, SIGGRAPH 1981 | Zeltner et al., *Real-Time Neural Appearance Models*, ACM TOG 43(3), 2024 |
+| Geometry | Karis, Stubbe & Wihlidal, *Nanite: A Deep Dive*, SIGGRAPH 2021 Advances in Real-Time Rendering course | Kerbl, Kopanas, Leimkühler & Drettakis, *3D Gaussian Splatting for Real-Time Radiance Field Rendering*, ACM TOG 42(4), SIGGRAPH 2023 |
 
-## Why horror
+## What the interruptions show
 
-The irony that interests me is in the first chapter. Procedural noise was graphics' way of faking
-nature's detail on purpose. Diffusion models are trained to *remove* noise, and they turn out to
-make pictures by running that removal backwards from pure static. The same noise that Perlin
-tamed is now the raw material.
+- **Noise.** Samples from $\mathcal{N}(0, I)$ follow the score $\nabla_x \log p_t(x)$ until they
+  settle into the ridge line of our own terrain. Stochastic reverse-time trajectories fan out and
+  converge onto a three-mode density. Then the landscape comes back as a $64\times64\times4$ latent that
+  starts as static and is fitted step by step. It ends as almost the same mountains, but the fine
+  detail is a different sample.
+- **Light.** A camera path is cut at its first hit. That vertex becomes the input of a small network
+  that is trained while it renders. Back in the valley, every path now stops at a hot query node and
+  reports to the same network. Only a few paths continue, to train the cache. (The real method
+  traces short paths and uses a heuristic to pick where to stop. The film always cuts at the first
+  hit.)
+- **Material.** The symbols of $R_s = \frac{F}{\pi}\frac{DG}{(N\cdot L)(N\cdot V)}$ come apart into
+  neurons, and a $64\times64$ weight matrix keeps changing. The Beckmann lobe on the rock becomes a
+  lumpy learned lobe that never settles.
+- **Geometry.** The heightfield is read as a loss surface, with optimisers rolling down $-\nabla L$
+  into its valleys. Then the triangles are gone. Gaussians spawn from one isotropic blob,
+  descend onto the land, get cloned, split and pruned, and a few floaters stay in the sky.
 
-The honest version is less dramatic: every learned counterpart in the table was built by graphics
-researchers, trained on renders made with the classical method, and is judged against it. The
-denoiser needs the path tracer. The splats are optimised against photographs through a
-rasteriser. The formula is not gone; it moved into the training loop. But the part you can read is
-shrinking, and that is worth a minute of unease.
+## Why this is the unsettling part
+
+The pictures a learned model makes are not the frightening part; the classical methods make
+pictures too. What changes is where the knowledge lives. Perlin's octave sum, Kajiya's integral
+and Cook and Torrance's microfacet term are claims about the world, and you can argue with them.
+A score network, a radiance cache and a neural BRDF decoder hold the same knowledge as fitted
+numbers. They answer correctly without saying why.
+
+The honest version is less dramatic. Every method in the right-hand column was built by graphics
+researchers, trained on data or renders produced with the left-hand column, and judged against it.
+The radiance cache is trained on path-traced radiance. Neural materials are fitted to
+reference layered materials. Splats are optimised through a rasteriser against photographs. The formulas did not
+disappear. They moved into the training loop, where fewer people read them.
 
 ## How the film is made
 
-Everything is procedural and rendered in the browser:
+Everything is procedural and rendered frame by frame with WebGL2 in headless Chromium. **The AI
+shots are visualisations of the ideas, not outputs of trained models.** No network is trained or
+evaluated anywhere in the film.
 
-- **Perlin marble**: 3D gradient noise with Perlin's quintic fade, turbulence driving $\sin(x + k\,\mathrm{turb}(\mathbf{p}))$. The diffusion chapter applies the forward process $x_t = \sqrt{\bar\alpha_t}\,x_0 + \sqrt{1-\bar\alpha_t}\,\epsilon$ to the frame, then "reverses" to a different $x_0$.
-- **Cornell box**: a real Monte Carlo path tracer with next-event estimation, shown at 1 to 8 samples per pixel. The "denoiser" is an edge-aware filter, not a network; its over-smoothing is deliberate.
-- **BRDF chart**: GGX distribution, Smith geometry term and Schlick Fresnel at five roughness values. The neural phase replaces the formula with a tiny random MLP over a coarse latent grid.
-- **Cliffs**: a ray-marched height field, then a cluster view whose cluster size doubles with distance, the way Nanite's LOD visualisation looks. The splat phase re-draws the frame as oriented screen-space Gaussians, with floaters.
-- **Sound**: synthesised from the same event list as the picture, so every glitch and keystroke lines up.
+What is computed for real:
+
+- **Terrain.** Six octaves of 2D gradient noise: pseudo-random unit gradients on a periodic
+  lattice with Perlin's later quintic fade. The lattice spacing goes from 4 world units down to
+  1/8, and each octave is summed at amplitude $2^{-i}$. The octaves are computed on the CPU into a
+  float texture and ray marched in a fragment shader. The clouds are a second, thresholded fbm
+  marched through a slab.
+- **Light paths.** 34 paths ray cast against the same heightfield, with cosine-weighted bounces
+  and shadow rays towards the sun. The image noise that falls as $1/\sqrt{\text{spp}}$ is simulated.
+- **Reflectance.** The rock's highlight and the wire lobe use the 1981 form above with a Beckmann
+  $D$ and the V-groove $G$. Fresnel uses Schlick's approximation instead of the full equations.
+- **Geometry view.** A world-space triangle grid with clusters of 128 triangles and a level of
+  detail that doubles with distance. It imitates the look of Nanite's visualisation, not its
+  cluster DAG or error metric.
+- **Sampling shots.** DDPM ancestral sampling with a linear $\beta$ schedule, strided to 44 and
+  120 steps. The score is the
+  *exact* score of a hand-made toy density (a blurred silhouette of the terrain's ridge line, and a
+  1D three-component mixture), not a learned $s_\theta$.
+- **Loss surface.** The optimiser trails are gradient descent with momentum on the heightfield.
+- **Splats.** Each Gaussian's 3D covariance is projected with the Jacobian of the perspective map
+  (EWA, as in 3D Gaussian Splatting), and the splats are sorted and alpha-blended.
+
+What is illustrative:
+
+- The latent follows a fixed schedule towards the terrain's cell means.
+- The cache's error is scripted to shrink.
+- The "MLP" on the rock has eight units with random weights that drift.
+- The weight matrices are made from sinusoids.
+- The splats move to precomputed positions on the terrain, taking their colours from the beauty
+  render. No loss is evaluated.
+
+The soundtrack is synthesised in numpy from the same event list as the picture. Each octave of
+noise adds a musical octave. In the sampling shots, white noise is filtered into a chord. The
+optimisers glide downwards in pitch. The source is in the site's repository under `studio/note01`.

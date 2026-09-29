@@ -6,8 +6,12 @@
 <style>
   @font-face { font-family: "Unbounded"; font-weight: 900; src: url(../../node_modules/@fontsource/unbounded/files/unbounded-latin-900-normal.woff2); }
   @font-face { font-family: "Serif"; font-weight: 400; src: url(../../node_modules/@fontsource/instrument-serif/files/instrument-serif-latin-400-normal.woff2); }
+  @font-face { font-family: "Serif"; font-weight: 400; unicode-range: U+0100-024F, U+1E00-1EFF; src: url(../../node_modules/@fontsource/instrument-serif/files/instrument-serif-latin-ext-400-normal.woff2); }
   @font-face { font-family: "Serif"; font-style: italic; font-weight: 400; src: url(../../node_modules/@fontsource/instrument-serif/files/instrument-serif-latin-400-italic.woff2); }
+  @font-face { font-family: "Serif"; font-style: italic; font-weight: 400; unicode-range: U+0100-024F, U+1E00-1EFF; src: url(../../node_modules/@fontsource/instrument-serif/files/instrument-serif-latin-ext-400-italic.woff2); }
   @font-face { font-family: "Mono"; font-weight: 500; src: url(../../node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-500-normal.woff2); }
+  @font-face { font-family: "Mono"; font-weight: 500; unicode-range: U+0370-03FF; src: url(../../node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-greek-500-normal.woff2); }
+  @font-face { font-family: "Mono"; font-weight: 500; unicode-range: U+0100-024F, U+1E00-1EFF; src: url(../../node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-ext-500-normal.woff2); }
   html, body { margin: 0; background: #000; }
   canvas { display: block; width: 100vw; max-width: 1920px; }
 </style>
@@ -16,406 +20,690 @@
 <canvas id="gl"></canvas>
 <script type="module">
 /*
- * INTRUSION: four SIGGRAPH techniques, each overtaken by its learned counterpart.
- * Deterministic per frame: window.renderFrame(n) draws frame n; capture.mjs records them.
+ * INTRUSION (v2). One procedural landscape, built by hand, then re-read by four learned paradigms.
+ * Deterministic per frame: window.renderFrame(n) draws frame n and returns a JPEG data URL.
+ * window.EVENTS carries bursts, typed text, chapters and shots for the soundtrack.
+ *
+ * Passes per frame
+ *   1. scene   : ray-marched heightfield + clouds + sky (or an ink plot backdrop) -> beauty (+ sky-only for splats), depth
+ *   2. vector  : JS-built lines / dots / cells, depth-tested against the scene (construction lines, signal plots)
+ *   3. splats  : anisotropic Gaussians drawn back-to-front over the sky, colours sampled from the beauty pass
+ *   4. post    : glitch, tonemap, grade, typography layer, grain
  */
 const TL = await (await fetch("timeline.json")).json();
-const W = 960, H = 540, FPS = TL.fps, FRAMES = TL.duration * FPS;
+const W = 960, H = 540, FPS = TL.fps, FRAMES = Math.round(TL.duration * FPS);
 const canvas = document.getElementById("gl");
 canvas.width = W; canvas.height = H;
-const gl = canvas.getContext("webgl2", { preserveDrawingBuffer: true, antialias: false });
+const gl = canvas.getContext("webgl2", { preserveDrawingBuffer: true, antialias: false, depth: false });
 gl.getExtension("EXT_color_buffer_float");
 
-// ------------------------------------------------------------------ shaders
-const VS = `#version 300 es
+// ------------------------------------------------------------------ small math
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const smooth = (x) => { x = clamp(x); return x * x * (3 - 2 * x); };
+const lerp = (a, b, k) => a + (b - a) * k;
+const ramp = (t, a, b) => smooth((t - a) / (b - a));
+const v3 = { add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]], sub: (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]],
+  mul: (a, s) => [a[0] * s, a[1] * s, a[2] * s], dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+  cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+  norm: (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; },
+  lerp: (a, b, k) => [lerp(a[0], b[0], k), lerp(a[1], b[1], k), lerp(a[2], b[2], k)] };
+function hashU(a, b, c) {
+  let h = (Math.imul(a | 0, 374761393) + Math.imul(b | 0, 668265263) + Math.imul(c | 0, 1440662683)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177); h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+function rng(seed) { let s = seed >>> 0 || 1; return () => { s = (s + 0x6d2b79f5) | 0; let t = Math.imul(s ^ (s >>> 15), 1 | s); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function gaussR(r) { const u = Math.max(r(), 1e-7), v = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+
+// ------------------------------------------------------------------ the world: gradient noise, by hand
+// Perlin-style gradient noise on a periodic lattice. Octave k has lattice spacing 4/2^k world units.
+const PER = 32, N = 1024, NOCT = 6, AMP = 1.9;
+function makeOct(k, seed, s0) {
+  const s = s0 / 2 ** k, p = Math.round(PER / s);
+  const gx = new Float32Array(p * p), gy = new Float32Array(p * p);
+  for (let j = 0; j < p; j++) for (let i = 0; i < p; i++) {
+    const a = 2 * Math.PI * hashU(i, j, seed * 131 + k);
+    gx[j * p + i] = Math.cos(a); gy[j * p + i] = Math.sin(a);
+  }
+  return { s, p, gx, gy };
+}
+const fade = (t) => t * t * t * (t * (t * 6 - 15) + 10);
+function noise(o, x, z) {
+  const u = x / o.s, v = z / o.s, i0 = Math.floor(u), j0 = Math.floor(v), fu = u - i0, fv = v - j0, p = o.p;
+  const i = ((i0 % p) + p) % p, j = ((j0 % p) + p) % p, i1 = (i + 1) % p, j1 = (j + 1) % p;
+  const d = (ii, jj, dx, dz) => o.gx[jj * p + ii] * dx + o.gy[jj * p + ii] * dz;
+  const a = d(i, j, fu, fv), b = d(i1, j, fu - 1, fv), c = d(i, j1, fu, fv - 1), e = d(i1, j1, fu - 1, fv - 1);
+  const su = fade(fu), sv = fade(fv);
+  return 1.4 * lerp(lerp(a, b, su), lerp(c, e, su), sv);
+}
+const OCT = [...Array(NOCT)].map((_, k) => makeOct(k, 11, 4));
+const COCT = [...Array(NOCT)].map((_, k) => makeOct(k, 97, 8));
+const texA = new Float32Array(N * N * 4), texB = new Float32Array(N * N * 4), HF = new Float32Array(N * N);
+let HMIN = 1e9, HMAX = -1e9;
+for (let iz = 0; iz < N; iz++) for (let ix = 0; ix < N; ix++) {
+  const x = ((ix + 0.5) * PER) / N, z = ((iz + 0.5) * PER) / N, q = (iz * N + ix) * 4;
+  let raw = 0, cl = 0;
+  for (let k = 0; k < NOCT; k++) {
+    const n = noise(OCT[k], x, z);
+    raw += n * 0.5 ** k;
+    if (k < 4) texA[q + k] = n; else texB[q + k - 4] = n;
+    cl += noise(COCT[k], x, z) * 0.5 ** k;
+  }
+  const h = AMP * raw;
+  texB[q + 2] = cl / 1.97; texB[q + 3] = h; HF[iz * N + ix] = h;
+  HMIN = Math.min(HMIN, h); HMAX = Math.max(HMAX, h);
+}
+// CPU sampler that matches GL_LINEAR on texel centres with REPEAT wrap
+function hAt(x, z) {
+  const u = (x / PER) * N - 0.5, v = (z / PER) * N - 0.5, i0 = Math.floor(u), j0 = Math.floor(v), fu = u - i0, fv = v - j0;
+  const w = (a) => ((a % N) + N) % N, i = w(i0), j = w(j0), i1 = w(i0 + 1), j1 = w(j0 + 1);
+  return lerp(lerp(HF[j * N + i], HF[j * N + i1], fu), lerp(HF[j1 * N + i], HF[j1 * N + i1], fu), fv);
+}
+function nAt(x, z) { const e = 0.04; return v3.norm([hAt(x - e, z) - hAt(x + e, z), 2 * e, hAt(x, z - e) - hAt(x, z + e)]); }
+function castRay(o, d, tmax = 70) {
+  let t = 0.02, lt = t;
+  for (let i = 0; i < 900; i++) {
+    const p = v3.add(o, v3.mul(d, t)), dy = p[1] - hAt(p[0], p[2]);
+    if (dy < 0) { let a = lt, b = t; for (let k = 0; k < 20; k++) { const m = (a + b) / 2, q = v3.add(o, v3.mul(d, m)); if (q[1] - hAt(q[0], q[2]) < 0) b = m; else a = m; } return (a + b) / 2; }
+    if (t > tmax || (p[1] > HMAX + 0.1 && d[1] > 0)) return null;
+    lt = t; t += Math.max(0.01, dy * 0.3);
+  }
+  return null;
+}
+
+// ------------------------------------------------------------------ camera
+const FOC = 1.5, NEAR = 0.05, FAR = 200;
+function cam(pos, yaw, pitch) {
+  const cp = Math.cos(pitch), f = [Math.sin(yaw) * cp, Math.sin(pitch), Math.cos(yaw) * cp];
+  const r = [-Math.cos(yaw), 0, Math.sin(yaw)], u = v3.cross(r, f);
+  return { pos, f, r, u, yaw, pitch };
+}
+function look(pos, tgt) { const d = v3.sub(tgt, pos); return cam(pos, Math.atan2(d[0], d[2]), Math.atan2(d[1], Math.hypot(d[0], d[2]))); }
+function camLerp(a, b, k) { return cam(v3.lerp(a.pos, b.pos, k), lerp(a.yaw, b.yaw, k), lerp(a.pitch, b.pitch, k)); }
+function proj(c, X) {
+  const v = v3.sub(X, c.pos), zv = v3.dot(v, c.f);
+  if (zv < NEAR) return null;
+  const sx = (v3.dot(v, c.r) / zv) * FOC, sy = (v3.dot(v, c.u) / zv) * FOC;
+  return { x: W / 2 + sx * H, y: H / 2 - sy * H, z: (FAR + NEAR) / (FAR - NEAR) - (2 * FAR * NEAR) / ((FAR - NEAR) * zv), zv };
+}
+function pixelRay(c, px, py) { const x = (px - W / 2) / H, y = (H / 2 - py) / H; return v3.norm(v3.add(v3.mul(c.f, FOC), v3.add(v3.mul(c.r, x), v3.mul(c.u, y)))); }
+
+// ------------------------------------------------------------------ GL helpers
+const VS_FULL = `#version 300 es
 in vec2 p; out vec2 uv; void main(){ uv = p*.5+.5; gl_Position = vec4(p,0,1); }`;
-
-const HEAD = `#version 300 es
-precision highp float;
-in vec2 uv; out vec4 o;
-uniform vec2 R; uniform float T, LT, AI, B, S, SC, SPP;
-#define TAU 6.28318530718
-#define PI 3.14159265359
-float h1(float n){ return fract(sin(n*127.1)*43758.5453); }
-float h2(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
-vec3 h33(vec3 p){
-  p = vec3(dot(p,vec3(127.1,311.7,74.7)), dot(p,vec3(269.5,183.3,246.1)), dot(p,vec3(113.5,271.9,124.6)));
-  return -1. + 2.*fract(sin(p)*43758.5453123);
-}
-// gradient noise with Perlin's 2002 quintic fade
-float gnoise(vec3 p){
-  vec3 i = floor(p), f = fract(p), u = f*f*f*(f*(f*6.-15.)+10.);
-  return mix(mix(mix(dot(h33(i), f), dot(h33(i+vec3(1,0,0)), f-vec3(1,0,0)), u.x),
-                 mix(dot(h33(i+vec3(0,1,0)), f-vec3(0,1,0)), dot(h33(i+vec3(1,1,0)), f-vec3(1,1,0)), u.x), u.y),
-             mix(mix(dot(h33(i+vec3(0,0,1)), f-vec3(0,0,1)), dot(h33(i+vec3(1,0,1)), f-vec3(1,0,1)), u.x),
-                 mix(dot(h33(i+vec3(0,1,1)), f-vec3(0,1,1)), dot(h33(i+vec3(1,1,1)), f-vec3(1,1,1)), u.x), u.y), u.z);
-}
-float fbm(vec3 p){ float a = .5, s = 0.; for(int i=0;i<5;i++){ s += a*gnoise(p); p *= 2.03; a *= .5; } return s; }
-float turb(vec3 p){ float a = .5, s = 0.; for(int i=0;i<5;i++){ s += a*abs(gnoise(p)); p *= 2.03; a *= .5; } return s; }
-float gauss(vec2 f, float k){ // Box-Muller, one sample per pixel/channel/step
-  float u1 = max(h2(f + k*17.13), 1e-4), u2 = h2(f*1.37 + k*9.71);
-  return sqrt(-2.*log(u1))*cos(TAU*u2);
-}
-mat2 rot(float a){ float c=cos(a), s=sin(a); return mat2(c,-s,s,c); }
-`;
-
-const SCENE = HEAD + `
-// --------------------------------------------------------------- the eye
-vec3 eye(vec2 q, float look){
-  vec2 c = vec2(.06*sin(T*.7)*look, .03*cos(T*.5)*look);
-  float lid = .44*(1. - pow(abs(q.x/1.15), 2.2));
-  float open = step(abs(q.y), lid);
-  vec2 d = q - c; float r = length(d), a = atan(d.y, d.x);
-  // sclera with veins
-  float vein = smoothstep(.72, .98, 1. - abs(fbm(vec3(q*7., 1.3))*2.)) * smoothstep(.2, .9, length(q));
-  vec3 col = mix(vec3(.86,.8,.76), vec3(.55,.04,.04), vein*.8);
-  col *= .65 + .35*smoothstep(lid, lid*.2, abs(q.y));
-  // iris: radial fibres
-  float fib = fbm(vec3(a*6., r*18., 2.)) * .5 + .5;
-  vec3 iris = mix(vec3(.02,.12,.12), vec3(.35,.95,.85), fib) * (1. - smoothstep(.18, .3, r)*.7);
-  iris = mix(iris, vec3(1., .35, .08), smoothstep(.12, .05, r) * .6);
-  col = mix(col, iris, smoothstep(.305, .29, r));
-  col *= 1. - smoothstep(.27, .305, r)*smoothstep(.315, .3, r)*.8;          // limbal ring
-  float pupil = .1 + .02*sin(T*2.3);
-  col = mix(col, vec3(0.), smoothstep(pupil + .01, pupil, r));
-  col += vec3(1.) * smoothstep(.035, .02, length(d - vec2(-.08, .09)));     // catchlight
-  vec3 skin = vec3(.09,.05,.05) * (.6 + .4*fbm(vec3(q*30., 4.)));
-  return mix(skin, col, open);
-}
-
-// --------------------------------------------------------------- 1: Perlin marble
-vec3 marble(vec2 f){
-  vec2 p = (f - .5*R)/R.y;
-  vec3 bg = vec3(.03,.035,.05) + vec3(.05,.07,.1)*turb(vec3(p*3., T*.05));
-  vec3 ro = vec3(0,0,3), rd = normalize(vec3(p, -1.6));
-  float b = dot(ro, rd), c = dot(ro,ro) - .78*.78, h = b*b - c;
-  if(h < 0.) return bg;
-  vec3 pos = ro + rd*(-b - sqrt(h)), n = normalize(pos);
-  vec3 q = pos; q.xz *= rot(T*.15); q.xy *= rot(.3);
-  float v = .5 + .5*sin(q.x*5. + 7.*turb(q*1.6));             // Perlin's marble: sin(x + turbulence)
-  vec3 alb = mix(vec3(.12,.16,.28), vec3(.93,.92,.88), pow(v, .6));
-  vec3 L = normalize(vec3(-.6,.7,.8));
-  float dif = max(dot(n, L), 0.), spec = pow(max(dot(reflect(-L, n), -rd), 0.), 60.);
-  return alb*(.12 + dif*1.1) + spec*.6 + vec3(.05,.07,.12)*(1. - n.z);
-}
-vec3 scene1(vec2 f){
-  vec3 x0 = marble(f);
-  if(AI <= 0.) return x0;
-  float k = floor(T*24.);
-  vec3 eps = vec3(gauss(f, k), gauss(f, k + 3.1), gauss(f, k + 7.3));
-  vec2 q = (f - .5*R)/R.y * 1.25;
-  // forward process to pure noise, then the reverse process lands somewhere else
-  float fwd = smoothstep(0., .42, AI), rev = smoothstep(.5, 1., AI);
-  vec3 x = AI < .46 ? x0 : eye(q, 1.) * 1.1;
-  float ab = AI < .46 ? 1. - fwd : rev*rev;
-  return max(sqrt(ab)*x + sqrt(1. - ab)*eps*.45, 0.);
-}
-
-// --------------------------------------------------------------- 2: Cornell box path tracer
-uint seed;
-float rnd(){ seed = seed*747796405u + 2891336453u; uint w = ((seed >> ((seed >> 28u) + 4u)) ^ seed)*277803737u; return float((w >> 22u) ^ w)/4294967295.; }
-vec3 cosDir(vec3 n){
-  float a = TAU*rnd(), z = rnd(), r = sqrt(z);
-  vec3 t = normalize(abs(n.y) < .9 ? cross(n, vec3(0,1,0)) : cross(n, vec3(1,0,0))), b = cross(n, t);
-  return normalize(t*r*cos(a) + b*r*sin(a) + n*sqrt(1. - z));
-}
-const vec3 SP1 = vec3(-.45,-.6,-.35); const float SR1 = .4;   // mirror
-const vec3 SP2 = vec3(.45,-.65,.25);  const float SR2 = .35;  // diffuse
-float sph(vec3 ro, vec3 rd, vec3 c, float r){
-  vec3 oc = ro - c; float b = dot(oc, rd), h = b*b - dot(oc,oc) + r*r;
-  if(h < 0.) return 1e9; h = sqrt(h);
-  float t = -b - h; if(t > 1e-3) return t; t = -b + h; return t > 1e-3 ? t : 1e9;
-}
-// returns t; out: normal, albedo, material (0 diffuse, 1 mirror, 2 light)
-float trace(vec3 ro, vec3 rd, out vec3 n, out vec3 alb, out int mat){
-  float t = 1e9; mat = 0;
-  for(int a=0;a<3;a++){
-    for(int s=-1;s<=1;s+=2){
-      float d = rd[a] == 0. ? 1e9 : (float(s) - ro[a])/rd[a];
-      if(d > 1e-3 && d < t){
-        vec3 p = ro + rd*d;
-        if(a == 2 && s == 1) continue;                        // open front
-        if(any(greaterThan(abs(p), vec3(1.001)))) continue;   // hit must lie on the box, not its plane
-        t = d; n = vec3(0); n[a] = -float(s); alb = vec3(.73);
-        if(a == 0) alb = s < 0 ? vec3(.63,.065,.05) : vec3(.14,.45,.09);
-        mat = (a == 1 && s == 1 && abs(p.x) < .28 && abs(p.z) < .28) ? 2 : 0;
-      }
-    }
-  }
-  float t1 = sph(ro, rd, SP1, SR1); if(t1 < t){ t = t1; n = normalize(ro + rd*t - SP1); alb = vec3(.95); mat = 1; }
-  float t2 = sph(ro, rd, SP2, SR2); if(t2 < t){ t = t2; n = normalize(ro + rd*t - SP2); alb = vec3(.75); mat = 0; }
-  return t;
-}
-bool occluded(vec3 ro, vec3 rd, float maxT){
-  return sph(ro, rd, SP1, SR1) < maxT || sph(ro, rd, SP2, SR2) < maxT;
-}
-vec3 scene2(vec2 f){
-  vec2 p = (f - .5*R)/R.y;
-  vec3 acc = vec3(0);
-  const vec3 LE = vec3(17., 12., 4.) * .9;
-  for(int s=0;s<8;s++){
-    if(float(s) >= SPP) break;
-    seed = uint(f.x) * 1973u + uint(f.y) * 9277u + uint(T*24.) * 26699u + uint(s) * 104729u;
-    vec2 j = (vec2(rnd(), rnd()) - .5)/R.y;
-    vec3 ro = vec3(0,0,3.35), rd = normalize(vec3(p + j, -1.25));
-    vec3 thr = vec3(1), L = vec3(0);
-    bool spec = true;
-    for(int k=0;k<4;k++){
-      vec3 n, alb; int mat;
-      float t = trace(ro, rd, n, alb, mat);
-      if(t > 1e8) break;
-      vec3 x = ro + rd*t;
-      if(mat == 2){ if(spec) L += thr*LE; break; }
-      if(mat == 1){
-        // the mirror sphere starts reflecting something that is not in the box
-        if(AI > .55 && k == 0){
-          vec2 q = (n.xy)*vec2(1.25, 1.25);
-          L += thr * eye(q, 0.) * smoothstep(.55, .85, AI) * 1.4;
-          thr *= 1. - smoothstep(.55, .85, AI);
-        }
-        ro = x + n*1e-3; rd = reflect(rd, n); thr *= alb; spec = true; continue;
-      }
-      // next event estimation on the ceiling light
-      vec3 lp = vec3((rnd()-.5)*.56, .999, (rnd()-.5)*.56);
-      vec3 ld = lp - x; float d2 = dot(ld, ld); ld /= sqrt(d2);
-      float cosL = max(ld.y, 0.), cosS = max(dot(n, ld), 0.);   // light faces down, ld points up
-      if(cosS > 0. && cosL > 0. && !occluded(x + n*1e-3, ld, sqrt(d2)))
-        L += thr * alb/PI * LE * cosS * cosL * (.56*.56) / d2;
-      ro = x + n*1e-3; rd = cosDir(n); thr *= alb; spec = false;
-    }
-    acc += L;
-  }
-  return acc / max(SPP, 1.);
-}
-
-// --------------------------------------------------------------- 3: BRDF chart
-vec3 env(vec3 d){
-  vec3 c = vec3(.012,.012,.018) + vec3(.03,.03,.05)*max(d.y,0.);
-  c += vec3(1.)*smoothstep(.97,.99, abs(d.x*.8+d.y*.6))*1.4;
-  c += vec3(1.)*smoothstep(.93,.96, d.y)*2.;
-  c += vec3(1.,.3,.2)*pow(max(0.,-d.x),6.)*.8;
-  c += vec3(.2,.6,1.)*pow(max(0., d.x),6.)*.8;
-  return c;
-}
-vec3 ggx(vec3 n, vec3 v, vec3 l, float a, vec3 F0){
-  vec3 h = normalize(v + l);
-  float nl = max(dot(n,l),0.), nv = max(dot(n,v),1e-3), nh = max(dot(n,h),0.), vh = max(dot(v,h),0.);
-  float a2 = a*a*a*a, dd = nh*nh*(a2 - 1.) + 1.;
-  float D = a2/(PI*dd*dd);
-  float k = (a+1.)*(a+1.)/8.;
-  float G = nl/(nl*(1.-k)+k) * nv/(nv*(1.-k)+k);
-  vec3 F = F0 + (1. - F0)*pow(1. - vh, 5.);
-  return D*F*G/(4.*nl*nv + 1e-4) * nl;
-}
-vec3 mlp(vec3 n, vec3 v, vec2 lat, float id){
-  // a tiny random 2-layer MLP; its weights drift as if still training
-  float x[6] = float[6](n.x, n.y, n.z, dot(n,v), lat.x, lat.y);
-  vec3 outc = vec3(0);
-  for(int j=0;j<8;j++){
-    float hsum = 0.;
-    for(int i=0;i<6;i++) hsum += (h1(float(i*13+j*7) + id*3.1) - .5) * 5. * x[i];
-    hsum += sin(T*1.3 + float(j) + id)*.6;
-    float hid = max(hsum, 0.);
-    outc += hid * (vec3(h1(float(j)*2.1+id), h1(float(j)*5.3+id+1.), h1(float(j)*7.7+id+2.)) - .35);
-  }
-  return 1./(1. + exp(-outc*1.6));
-}
-vec3 scene3(vec2 f){
-  vec2 p = (f - .5*R)/R.y;
-  vec3 ro = vec3(0,.15,6.), rd = normalize(vec3(p, -1.9));
-  vec3 col = vec3(.015,.015,.02) + vec3(.04,.03,.05)*smoothstep(-.6,.3,-p.y);
-  float best = 1e9; vec3 bn; float bid = -1.;
-  for(int i=0;i<5;i++){
-    vec3 c = vec3(-2.2 + float(i)*1.1, 0., 0.);
-    float t = sph(ro, rd, c, .45);
-    if(t < best){ best = t; bn = normalize(ro + rd*t - c); bid = float(i); }
-  }
-  // floor shadowing
-  float fl = (-.47 - ro.y)/rd.y;
-  if(fl > 0. && fl < best){
-    vec3 x = ro + rd*fl;
-    float ao = 1.;
-    for(int i=0;i<5;i++) ao *= smoothstep(.2, .9, length(x.xz - vec2(-2.2 + float(i)*1.1, 0.)));
-    col = vec3(.03,.03,.04)*ao*exp(-abs(x.z)*.3);
-  }
-  if(best < 1e8){
-    vec3 v = -rd, l = normalize(vec3(-.5,.8,.6));
-    float a = .06 + bid*.2;
-    vec3 base = vec3(.95,.64,.54);                       // copper-ish metal
-    vec3 r = reflect(rd, bn);
-    vec3 ana = ggx(bn, v, l, a, base)*3. + env(mix(r, bn, a*a))*base*mix(1., .35, a);
-    // infection runs left to right
-    float inf = smoothstep(bid*.14, bid*.14 + .25, AI);
-    vec2 lat = floor(bn.xy*mix(40., 6., inf))/6.;         // coarse latent texels
-    vec3 neu = pow(mlp(bn, v, lat, bid), vec3(3.)) * (.8 + .4*sin(T*4. + bid)) + env(r)*.12;
-    col = mix(ana, neu, inf);
-  }
-  return col;
-}
-
-// --------------------------------------------------------------- 4: cliffs, Nanite view
-float hgt(vec2 x){ float r = 1. - abs(gnoise(vec3(x*.45, 1.))); return 1.5*fbm(vec3(x*.3, 0.)) + .9*r*r - .5; }
-vec3 scene4(vec2 f){
-  vec2 p = (f - .5*R)/R.y;
-  float z = LT*.7;
-  vec3 ro = vec3(.3*sin(LT*.2), 1.35, -z), rd = normalize(vec3(p.x, p.y - .25, -1.5));
-  float t = .2; bool hit = false;
-  for(int i=0;i<110;i++){
-    vec3 x = ro + rd*t; float d = x.y - hgt(x.xz);
-    if(d < .002*t){ hit = true; break; }
-    t += d*.45; if(t > 28.) break;
-  }
-  vec3 sky = mix(vec3(.55,.36,.26), vec3(.05,.06,.1), clamp(p.y*2.2+.25, 0., 1.));
-  if(!hit) return sky;
-  vec3 x = ro + rd*t;
-  vec2 e = vec2(.02, 0);
-  vec3 n = normalize(vec3(hgt(x.xz - e.xy) - hgt(x.xz + e.xy), 2.*e.x, hgt(x.xz - e.yx) - hgt(x.xz + e.yx)));
-  vec3 sun = normalize(vec3(.7,.28,-.5));
-  vec3 alb = mix(vec3(.13,.11,.1), vec3(.3,.26,.22), fbm(x*3.)*.5+.5);
-  vec3 beauty = alb*(max(dot(n, sun), 0.)*vec3(2.6,1.9,1.3) + vec3(.1,.12,.16)*(.5+.5*n.y));
-  beauty = mix(beauty, sky, 1. - exp(-t*.045));
-  // Nanite visualisation: clusters coloured by id, cluster size grows with distance (LOD)
-  float lod = exp2(floor(log2(max(t, 1.)*1.2)));
-  vec3 q = x*4./lod;
-  vec3 cell = floor(q);
-  vec3 cc = .5 + .5*cos(TAU*(h1(dot(cell, vec3(1.,57.,113.)))*1.7 + vec3(0,.33,.67)));
-  vec2 tri = fract(vec2(q.x + q.z*.577, q.z*1.155));
-  float wire = min(min(tri.x, tri.y), abs(1. - tri.x - tri.y));
-  vec3 nan = cc*(.35 + .65*max(dot(n, sun), 0.));
-  nan *= mix(.45, 1., smoothstep(.0, .06*lod/1.2, wire));
-  float wipe = smoothstep(-.02, .02, f.x/R.x - clamp((LT - 1.5)/1.6, 0., 1.1));
-  return mix(nan, beauty, wipe);
-}
-
-void main(){
-  vec2 f = uv*R;
-  vec3 c = vec3(0);
-  if(SC == 1.) c = scene1(f);
-  else if(SC == 2.) c = scene2(f);
-  else if(SC == 3.) c = scene3(f);
-  else if(SC == 4.) c = scene4(f);
-  else if(SC == 5.){ vec2 q = (f - .5*R)/R.y*1.2; c = eye(q, 1.) * AI; }
-  o = vec4(c, 1.);
-}`;
-
-const POST = HEAD + `
-uniform sampler2D SRC, TXT;
-uniform float PM, DS, SP;
-vec3 tone(vec3 c){ c = max(c,0.); return c*(2.51*c+.03)/(c*(2.43*c+.59)+.14); }
-vec3 smp(vec2 u){ return texture(SRC, u).rgb; }
-// edge-aware blur standing in for the learned denoiser
-vec3 denoise(vec2 u, float rad){
-  vec3 c0 = smp(u), s = vec3(0); float w = 0.;
-  for(int y=-3;y<=3;y++) for(int x=-3;x<=3;x++){
-    vec2 o = vec2(x,y)*rad/R;
-    vec3 c = smp(u + o);
-    float k = exp(-float(x*x+y*y)/8.) * exp(-dot(c - c0, c - c0)*mix(2., .05, clamp(rad/9., 0., 1.)));
-    s += c*k; w += k;
-  }
-  return s/w;
-}
-// screen-space Gaussian splats: every cell becomes an oriented, soft ellipse; some drift away
-vec3 splats(vec2 f, float amt){
-  float cs = 9.;
-  vec2 g = floor(f/cs);
-  vec3 acc = vec3(0); float wsum = 0.;
-  for(int y=-2;y<=2;y++) for(int x=-2;x<=2;x++){
-    vec2 id = g + vec2(x,y);
-    float r1 = h2(id), r2 = h2(id + 7.7), r3 = h2(id + 3.3);
-    vec2 center = (id + .5)*cs;
-    bool floater = r3 > .9;
-    vec2 c = center + (floater ? (vec2(r1, r2) - .5)*cs*2.*amt : vec2(0));
-    vec3 col = smp((floater ? center + (vec2(r2, r1) - .5)*amt*amt*220. : center)/R);
-    vec2 d = rot(r1*TAU)*(f - c);
-    d /= vec2(mix(1., 2.4, r2), mix(1., .6, r2)) * cs * mix(.5, 1.2, amt) * (floater ? 1. + amt*.8 : 1.);
-    float w = exp(-dot(d,d)*2.);
-    acc += col*w; wsum += w;
-  }
-  return acc/max(wsum, 1e-3);
-}
-void main(){
-  vec2 f = uv*R, u = uv;
-  float fs = floor(S*13.);
-  float band = floor(f.y / mix(4., 38., h1(floor(f.y/41.)+fs)));
-  if(h1(band + fs*1.7) < B*.32) u.x += (h1(band*3.1+fs) - .5)*.3*B;
-  vec2 blk = floor(f/mix(24., 48., h1(floor(S*7.))));
-  if(h2(blk + fs) < B*.16) u += (vec2(h2(blk+3.1+fs), h2(blk+7.7+fs)) - .5)*vec2(.2,.1)*B;
-  bool mosh = h2(blk*1.3 + fs + 5.) < B*.14;
-  if(mosh) u = (floor(u*R/8.)*8. + 4.)/R;
-
-  vec3 col;
-  if(PM == 2. && u.x < DS) col = denoise(u, SP);
-  else if(PM == 4. && SP > 0.) col = splats(u*R, SP);
-  else {
-    float ca = .0012 + .016*B*B;
-    col = vec3(smp(u + vec2(ca,0)).r, smp(u).g, smp(u - vec2(ca,0)).b);
-  }
-  if(PM == 2. && abs(u.x - DS) < .002) col += vec3(2., .1, .3);   // the denoiser's scan line
-  if(h1(floor(f.y/3.) + fs*.37) < B*.22){
-    for(int k=1;k<12;k++){
-      vec3 c2 = smp(u - vec2(float(k)*.006*B, 0.));
-      if(dot(c2, vec3(.3,.59,.11)) > dot(col, vec3(.3,.59,.11))) col = c2;
-    }
-  }
-  if(mosh) col = floor(col*4.)/4.;
-  col = tone(col*1.1);
-  vec4 tx = texture(TXT, vec2(u.x, 1. - u.y));
-  col = mix(col, tx.rgb, tx.a);
-  col *= .92 + .08*sin(f.y*3.14159);
-  vec2 v = uv - .5; col *= 1. - dot(v*vec2(.8,1.2), v*vec2(.8,1.2));
-  col += (h2(f + fs + T) - .5)*(.025 + .05*B);
-  if(B > .9 && h1(fs) < .5) col = 1. - col;
-  o = vec4(pow(clamp(col,0.,1.), vec3(1./2.2)), 1.);
-}`;
-
-function program(fs) {
+function program(vs, fs, attribs) {
   const p = gl.createProgram();
-  for (const [t, src] of [[gl.VERTEX_SHADER, VS], [gl.FRAGMENT_SHADER, fs]]) {
+  for (const [t, src] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fs]]) {
     const s = gl.createShader(t); gl.shaderSource(s, src); gl.compileShader(s);
     if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
     gl.attachShader(p, s);
   }
-  gl.bindAttribLocation(p, 0, "p"); gl.linkProgram(p);
+  attribs.forEach((a, i) => gl.bindAttribLocation(p, i, a));
+  gl.linkProgram(p);
   if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
   const cache = {};
-  p.u = (n) => cache[n] ??= gl.getUniformLocation(p, n);
+  p.u = (n) => (n in cache ? cache[n] : (cache[n] = gl.getUniformLocation(p, n)));
   return p;
 }
-const scene = program(SCENE), post = program(POST);
-gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
-gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
-gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-function tex(ifmt, fmt, type) {
+function makeTex(w, h, ifmt, fmt, type, data, { filter = gl.LINEAR, wrap = gl.CLAMP_TO_EDGE, mip = false } = {}) {
   const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
-  gl.texImage2D(gl.TEXTURE_2D, 0, ifmt, W, H, 0, fmt, type, null);
-  for (const k of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, k, gl.LINEAR);
-  for (const k of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D, k, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D, 0, ifmt, w, h, 0, fmt, type, data ?? null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, mip ? gl.LINEAR_MIPMAP_LINEAR : filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap);
+  if (mip) gl.generateMipmap(gl.TEXTURE_2D);
   return t;
 }
-const sceneTex = tex(gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT), txtTex = tex(gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE);
-const fbo = gl.createFramebuffer();
-gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, sceneTex, 0);
+const tA = makeTex(N, N, gl.RGBA16F, gl.RGBA, gl.FLOAT, texA, { wrap: gl.REPEAT });
+const tB = makeTex(N, N, gl.RGBA16F, gl.RGBA, gl.FLOAT, texB, { wrap: gl.REPEAT, mip: true });
+const LN = 64, latData = new Float32Array(LN * LN * 4);
+const tL = makeTex(LN, LN, gl.RGBA16F, gl.RGBA, gl.FLOAT, latData, { wrap: gl.REPEAT });
+const beautyTex = makeTex(W, H, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
+const skyTex = makeTex(W, H, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
+const txtTex = makeTex(W, H, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE);
+const depthRB = gl.createRenderbuffer();
+gl.bindRenderbuffer(gl.RENDERBUFFER, depthRB); gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, W, H);
+const fboScene = gl.createFramebuffer();
+gl.bindFramebuffer(gl.FRAMEBUFFER, fboScene);
+gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, beautyTex, 0);
+gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, skyTex, 0);
+gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depthRB);
+const fboSplat = gl.createFramebuffer();
+gl.bindFramebuffer(gl.FRAMEBUFFER, fboSplat);
+gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, skyTex, 0);
+gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
-// ------------------------------------------------------------------ timeline + events
-const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
-const smooth = (x) => { x = clamp(x); return x * x * (3 - 2 * x); };
-function rng(seed) { return () => (seed = (seed * 16807) % 2147483647) / 2147483647; }
-const sceneAt = (t) => TL.scenes.find((s) => t >= s.start && t < s.end) ?? TL.scenes.at(-1);
+// ------------------------------------------------------------------ scene shader
+const HEAD = `#version 300 es
+precision highp float;
+precision highp sampler2D;
+#define PI 3.14159265359
+#define TAU 6.28318530718
+float h12(vec2 p){ vec3 p3 = fract(vec3(p.xyx)*.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y)*p3.z); }
+float h13(vec3 p3){ p3 = fract(p3*.1031); p3 += dot(p3, p3.zyx + 31.32); return fract((p3.x + p3.y)*p3.z); }
+`;
+const SCENE = HEAD + `
+in vec2 uv;
+layout(location = 0) out vec4 o0;
+layout(location = 1) out vec4 o1;
+uniform vec2 R; uniform float T;
+uniform vec3 RO, CF, CR, CU;
+uniform sampler2D tA, tB, tL;
+uniform vec4 wA; uniform vec2 wB;
+uniform float DSKY, BUILD, HS, HMAX, INK, CLAY, TOPO, SUNE, SUNA, CLOUD, LAT, MC, CACHE, STEP, ROUGH, SPEC, NEU, WIRE, CLUS, LOSS, SPL, FRAME;
+uniform vec3 LATOFF;
+const float PER = ${PER.toFixed(1)}, AMP = ${AMP.toFixed(3)}, FOC = ${FOC.toFixed(3)}, NEAR = ${NEAR}, FAR = ${FAR.toFixed(1)};
+const float CB = 8.6, CT = 10.4;
+vec3 SD;
 
-// bursts: scene cuts, each breach, jittery aftershocks while the AI runs, the shout, the outro eye
+float hfull(vec2 p){ return textureLod(tB, p/PER, 0.).a; }
+float hgt(vec2 p){
+  vec2 u = p/PER;
+  if(BUILD > .5) return HS*AMP*(dot(textureLod(tA, u, 0.), wA) + dot(textureLod(tB, u, 0.).xy, wB));
+  float h = textureLod(tB, u, 0.).a;
+  if(LAT > 0.){
+    vec2 q = (p + LATOFF.xy)/PER;
+    float det = textureLod(tB, q, 0.).a - textureLod(tB, q, 4.).a;
+    float nearest = texelFetch(tL, ivec2(mod(floor(u*64.), 64.)), 0).r;
+    float smoothH = textureLod(tL, u, 0.).r + det*LATOFF.z;
+    h = mix(h, mix(nearest, smoothH, LATOFF.z), LAT);
+  }
+  return h;
+}
+float march(vec3 ro, vec3 rd, out bool hit){
+  hit = false;
+  float top = HMAX + .05, t = NEAR;
+  if(ro.y > top){ if(rd.y >= 0.) return FAR; t = max(t, (ro.y - top)/-rd.y); }
+  float lt = t;
+  for(int i = 0; i < 190; i++){
+    vec3 p = ro + rd*t;
+    float d = p.y - hgt(p.xz);
+    if(d < 0.){ hit = true; break; }
+    if(t > 90. || (p.y > top && rd.y > 0.)) break;
+    lt = t;
+    t += LAT > 0. ? clamp(d*.42, .0025*t + .002, .18) : max(d*.42, .0025*t + .002);
+  }
+  if(!hit) return FAR;
+  float a = lt, b = t;
+  for(int i = 0; i < 6; i++){ float m = .5*(a + b); vec3 p = ro + rd*m; if(p.y - hgt(p.xz) < 0.) b = m; else a = m; }
+  return .5*(a + b);
+}
+vec3 nrm(vec2 p, float t){
+  float e = max(.02, .0012*t);
+  return normalize(vec3(hgt(p - vec2(e, 0)) - hgt(p + vec2(e, 0)), 2.*e, hgt(p - vec2(0, e)) - hgt(p + vec2(0, e))));
+}
+// value noise with analytic derivatives, used only for close-up rock detail
+vec3 vn2(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f*f*f*(f*(f*6. - 15.) + 10.), du = 30.*f*f*(f*(f - 2.) + 1.);
+  float a = h12(i), b = h12(i + vec2(1, 0)), c = h12(i + vec2(0, 1)), d = h12(i + vec2(1, 1));
+  float k1 = b - a, k2 = c - a, k4 = a - b - c + d;
+  return vec3(a + k1*u.x + k2*u.y + k4*u.x*u.y, du*vec2(k1 + k4*u.y, k2 + k4*u.x));
+}
+float shadow(vec3 p){
+  if(SD.y < -.02) return 0.;
+  float res = 1., t = .04;
+  for(int i = 0; i < 28; i++){
+    vec3 q = p + SD*t;
+    if(q.y > HMAX + .05) break;
+    float d = q.y - hgt(q.xz);
+    res = min(res, 10.*d/t);
+    if(res < .01) break;
+    t += clamp(d*.5, .03, .7);
+  }
+  return clamp(res, 0., 1.);
+}
+float cloudCov(){ return mix(.75, .06, CLOUD); }
+float cloudD(vec3 p){
+  float f = textureLod(tB, (p.xz + vec2(T*.18, T*.05))/PER, 0.).b;
+  float hh = (p.y - CB)/(CT - CB);
+  return clamp((f - cloudCov())*4. - abs(hh - .38)*2.2, 0., 1.);
+}
+float day(){ return smoothstep(-.14, .12, SUNE); }
+vec3 sunCol(){ return mix(vec3(3.0, 1.55, .72), vec3(3.2, 2.5, 1.8), smoothstep(.1, .6, SUNE))*smoothstep(-.05, .05, SUNE); }
+vec3 ambCol(){ return mix(vec3(.03, .04, .08), vec3(.10, .145, .25), day()); }
+vec3 sky(vec3 rd){
+  float dy = day();
+  vec3 zen = mix(vec3(.006, .009, .02), vec3(.035, .075, .2), dy);
+  vec3 hor = mix(vec3(.03, .035, .06), vec3(.66, .45, .33), dy);
+  float h = max(rd.y, 0.);
+  vec3 c = mix(hor, zen, pow(h, .42));
+  float mu = max(dot(rd, SD), 0.);
+  c += vec3(1., .5, .22)*pow(mu, 6.)*.55*dy + vec3(1., .72, .45)*pow(mu, 60.)*.7*dy;
+  c = mix(c, hor*.55, smoothstep(0., -.08, rd.y));
+  return c;
+}
+vec4 clouds(vec3 ro, vec3 rd, float tlim){
+  if(CLOUD <= 0.) return vec4(0, 0, 0, 1);
+  float ta, tb;
+  if(abs(rd.y) < 1e-3) return vec4(0, 0, 0, 1);
+  ta = (CB - ro.y)/rd.y; tb = (CT - ro.y)/rd.y;
+  if(ta > tb){ float s = ta; ta = tb; tb = s; }
+  ta = max(ta, 0.); tb = min(tb, min(tlim, ta + 14.));
+  if(tb <= ta) return vec4(0, 0, 0, 1);
+  float dt = (tb - ta)/8., tr = 1.;
+  vec3 acc = vec3(0);
+  float j = h12(gl_FragCoord.xy + fract(T)*91.);
+  vec3 sc = sunCol(), am = ambCol();
+  float mu = dot(rd, SD), ph = .6 + .9*pow(max(mu, 0.), 6.);
+  for(int i = 0; i < 8; i++){
+    vec3 p = ro + rd*(ta + (float(i) + j)*dt);
+    float d = cloudD(p);
+    if(d > .01){
+      float l = exp(-cloudD(p + SD*.7)*3.2);
+      float a = 1. - exp(-d*dt*1.6);
+      acc += tr*a*(sc*l*ph*.8 + am*1.1 + vec3(.015));
+      tr *= 1. - a;
+    }
+  }
+  float fadeD = exp(-ta*.012);
+  return vec4(acc*fadeD, mix(1., tr, fadeD));
+}
+float cloudShadow(vec3 p){
+  if(CLOUD <= 0. || SD.y < .02) return 1.;
+  vec3 q = p + SD*((CB + .7 - p.y)/SD.y);
+  return mix(1., exp(-cloudD(q)*2.4), .85);
+}
+vec3 sunDisk(vec3 rd){ float mu = max(dot(rd, SD), 0.); return (vec3(18., 12., 7.)*smoothstep(.99955, .9998, mu) + vec3(1., .55, .28)*pow(mu, 700.)*2.5)*smoothstep(-.03, .01, SUNE); }
+vec3 skyWithClouds(vec3 ro, vec3 rd){
+  vec3 s = sky(rd);
+  vec4 c = clouds(ro, rd, 1e5);
+  return s*c.a + c.rgb + sunDisk(rd)*mix(.25, 1., c.a);
+}
+// Cook-Torrance 1981: Rs = F/pi * D G / ((N.L)(N.V)), Beckmann D with rms slope m
+float ctSpec(vec3 n, vec3 v, vec3 l, float m, float F0){
+  vec3 h = normalize(v + l);
+  float nl = max(dot(n, l), 0.), nv = max(dot(n, v), 1e-3), nh = max(dot(n, h), 1e-3), vh = max(dot(v, h), 1e-3);
+  float c2 = nh*nh, t2 = (1. - c2)/c2;
+  float D = exp(-t2/(m*m))/(m*m*c2*c2);
+  float G = min(1., min(2.*nh*nv/vh, 2.*nh*nl/vh));
+  float F = F0 + (1. - F0)*pow(1. - vh, 5.);
+  return F/PI*D*G/(nl*nv + 1e-4);
+}
+vec3 albedo(vec3 p, vec3 n){
+  vec2 u = p.xz/PER;
+  float mot = textureLod(tA, u*4., 0.).w;
+  float slope = 1. - n.y;
+  vec3 a = mix(vec3(.055, .07, .045), vec3(.15, .125, .095), smoothstep(.06, .2, slope + mot*.06 + (p.y + .5)*.05));
+  a = mix(a, vec3(.25, .24, .23)*(.85 + .3*mot), smoothstep(.2, .4, slope + mot*.05));
+  a = mix(a, vec3(.8, .8, .79), smoothstep(1.05, 1.5, p.y + mot*.12)*smoothstep(.5, .3, slope));
+  return a;
+}
+float ndcDepth(float zv){ return .5*((FAR + NEAR)/(FAR - NEAR) - 2.*FAR*NEAR/((FAR - NEAR)*zv)) + .5; }
+
+vec3 hot = vec3(1., .027, .12), cyan = vec3(.02, .8, 1.), paper = vec3(.83, .82, .78);
+
+void main(){
+  vec2 f = uv*R, p = (f - .5*R)/R.y;
+  float sn = cos(SUNE);
+  SD = normalize(vec3(sin(SUNA)*sn, sin(SUNE), cos(SUNA)*sn));
+  o1 = vec4(0);
+  if(INK > .5){
+    // the foreign signal: ink with a faint measurement grid
+    vec2 g = abs(fract(f/48. + .5) - .5)*48.;
+    float grid = (1. - smoothstep(0., 1.2, min(g.x, g.y)))*.012;
+    o0 = vec4(vec3(.0018, .0018, .0026) + vec3(.35, .38, .45)*grid, 1);
+    gl_FragDepth = 1.;
+    return;
+  }
+  vec3 ro = RO, rd = normalize(CF*FOC + CR*p.x + CU*p.y);
+  bool hit;
+  float t = march(ro, rd, hit);
+  vec3 col;
+  if(SPL > .5) o1 = vec4(mix(vec3(.0018, .0018, .0026), skyWithClouds(ro, rd), smoothstep(-.02, .06, rd.y)), 1);
+  if(!hit){
+    if(LOSS > .5) col = vec3(.0018, .0018, .0026);
+    else if(CLAY > .99) col = mix(vec3(.012, .012, .016), vec3(.035, .035, .04), clamp(rd.y*2. + .5, 0., 1.));
+    else col = mix(skyWithClouds(ro, rd), mix(vec3(.012, .012, .016), vec3(.035, .035, .04), clamp(rd.y*2. + .5, 0., 1.)), CLAY);
+    col = mix(col, vec3(.0018, .0018, .0026) + col*vec3(.08, .05, .11), DSKY);
+    o0 = vec4(col, 1);
+    gl_FragDepth = 1.;
+    return;
+  }
+  vec3 x = ro + rd*t;
+  vec3 n = nrm(x.xz, t);
+  float zv = t*dot(rd, CF);
+  gl_FragDepth = ndcDepth(zv);
+  // close-up detail for the rock (chapter 3)
+  float near = smoothstep(7., 2.5, t);
+  if(near > 0.){
+    vec3 d1 = vn2(x.xz*7.)*.05 + vn2(x.xz*17. + 3.)*.022 + vn2(x.xz*41. + 7.)*.009;
+    n = normalize(n - vec3(d1.y*7., 0., d1.z*7.)*near*.55);
+  }
+  vec3 v = -rd;
+  float sh = shadow(x + n*.02);
+  float cs = cloudShadow(x);
+  vec2 u = x.xz/PER;
+  float ao = clamp(.62 + (x.y - textureLod(tB, u, 3.).a)*1.1, .2, 1.);
+  float dif = max(dot(n, SD), 0.);
+
+  if(LOSS > .5){
+    // the same mountains read as an error surface L(theta): iso-loss contours on ink
+    float hh = x.y/.2, fw = max(.015, t*.0017/.2*(1. + 1.4*(1. - n.y)));
+    float c = abs(fract(hh + .5) - .5);
+    float line = 1. - smoothstep(fw*.6, fw*1.6, c);
+    float major = step(4.5, mod(floor(hh + .5), 5.));
+    vec3 lc = mix(cyan, hot, smoothstep(-1.2, 1.8, x.y));
+    col = vec3(.004, .004, .006) + vec3(.02, .022, .03)*max(dot(n, normalize(vec3(.3, .8, .2))), 0.);
+    col += lc*line*(.22 + .9*major)*exp(-t*.03);
+    col *= exp(-t*.012);
+    o0 = vec4(col, 1);
+    return;
+  }
+
+  // ---- clay (the construction pass) and the natural look
+  float raw = hgt(x.xz)/max(HS*AMP, 1e-3);
+  if(BUILD > .5) raw = dot(textureLod(tA, u, 0.), wA) + dot(textureLod(tB, u, 0.).xy, wB);
+  float gA = clamp(.5 + .46*raw, .02, .98);
+  vec3 greyA = vec3(pow(gA, 2.2));
+  vec3 clay = mix(vec3(.28), greyA*.8 + .04, TOPO);
+  vec3 kl = normalize(vec3(.62, .5, -.35));
+  vec3 clayCol = clay*(.16 + 1.7*max(dot(n, kl), 0.)*mix(1., .7 + .3*ao, HS));
+  float flatK = (1. - smoothstep(0., .08, HS))*TOPO;
+  clayCol = mix(clayCol, greyA*1.15, flatK);
+
+  vec3 alb = albedo(x, n);
+  vec3 sc = sunCol(), am = ambCol();
+  // chapter 3: the rock is a latent texture decoded by a random, still-training MLP
+  float neuCell = 0.;
+  if(NEU > 0.){
+    vec3 cell = floor(x*7.);
+    float z[8];
+    for(int k = 0; k < 8; k++) z[k] = h13(cell + float(k)*17.31) - .5;
+    vec3 lc = vec3(0);
+    for(int k = 0; k < 8; k++) lc += z[k]*vec3(h12(vec2(k, 1.)) - .5, h12(vec2(k, 2.)) - .5, h12(vec2(k, 3.)) - .5)*3.;
+    lc = 1./(1. + exp(-lc*2.));
+    vec3 lat = mix(mix(vec3(.02), hot, lc.x), cyan, lc.y*lc.z);
+    vec3 fq = fract(x*7.);
+    float edge = step(min(min(fq.x, fq.z), min(1. - fq.x, 1. - fq.z)), .05);
+    neuCell = edge;
+    alb = mix(alb, lat*.7 + alb*.25 + hot*edge*.5, NEU*.9);
+  }
+  float spec = ctSpec(n, v, SD, ROUGH, .06)*SPEC;
+  if(NEU > 0.){
+    // "mlp": 8 hidden relu units over (n, v, l, cell code), weights drift with STEP
+    float o = 0.;
+    for(int j = 0; j < 8; j++){
+      float s = 0.;
+      s += (h12(vec2(j, 11.)) - .5)*4.*n.x + (h12(vec2(j, 12.)) - .5)*4.*n.z + (h12(vec2(j, 13.)) - .5)*4.*dot(n, SD);
+      s += (h12(vec2(j, 14.)) - .5)*4.*dot(reflect(-SD, n), v) + (h13(floor(x*7.) + float(j)) - .5)*2.;
+      s += sin(STEP*.07 + float(j)*1.7)*.8;
+      o += max(s, 0.)*(h12(vec2(j, 15.)) - .4);
+    }
+    spec = mix(spec, max(spec*(1. + o*.9) + o*.35, 0.), NEU);
+  }
+  vec3 ind = am*(.55 + .45*n.y)*ao*alb*1.4 + alb*sc*.035*max(n.y, 0.);
+  if(CACHE > 0.){
+    // chapter 2: indirect light read from a coarse cache that is still training
+    vec3 cell = floor(x/.55);
+    float e = (h13(cell + floor(STEP)*.731) - .5)*2.;
+    float amp = mix(1.6, .45, clamp(STEP/60., 0., 1.));
+    vec3 tint = e > 0. ? hot : cyan;
+    vec3 fq = fract(x/.55);
+    float edge = step(min(min(fq.x, fq.z), min(1. - fq.x, 1. - fq.z)), .035);
+    vec3 cached = ind*(1. + e*amp) + tint*abs(e)*amp*.06*ao;
+    ind = mix(ind, cached + tint*edge*.03, CACHE);
+  }
+  vec3 direct = alb*sc*dif*sh*cs + sc*spec*dif*sh*cs;
+  vec3 nat = direct + ind;
+  if(MC > 0.){
+    // simulated Monte Carlo variance, sigma ~ 1/sqrt(spp): exponential weights give fireflies
+    float r1 = max(h12(f + FRAME*1.618 + 13.), 1e-4);
+    nat = nat*max(0., 1. + MC*(-log(r1) - 1.));
+  }
+  // aerial perspective + morning mist in the valleys
+  vec3 fogc = sky(normalize(vec3(rd.x, .03, rd.z)));
+  fogc = mix(fogc, fogc*vec3(.12, .08, .15), DSKY);
+  float fogA = 1. - exp(-t*.0125);
+  float mist = exp(-max(x.y + 1.3, 0.)*1.8)*(1. - exp(-t*.05))*.4*day();
+  nat = mix(nat, fogc, clamp(fogA + mist, 0., 1.));
+  vec4 cl = clouds(ro, rd, t);
+  nat = nat*cl.a + cl.rgb;
+
+  col = mix(nat, clayCol, CLAY);
+
+  if(LAT > 0.){
+    // chapter 1: the landscape decoded from a 64x64x4 latent that is still being fitted
+    vec2 cc = floor((x.xz - n.xz*.03)/PER*64.);
+    vec4 z = texelFetch(tL, ivec2(mod(cc, 64.)), 0);
+    vec3 fc = mix(mix(vec3(.01), cyan*.8, clamp(z.g, 0., 1.)), hot, clamp(z.b, 0., 1.)*.85) + paper*pow(clamp(z.a, 0., 1.), 3.)*.3;
+    vec2 fq = fract(u*64.);
+    float fw = max(.03, t*.0016*64./PER);
+    float edge = 1. - smoothstep(fw*.5, fw*1.5, min(min(fq.x, fq.y), min(1. - fq.x, 1. - fq.y)));
+    vec3 lit = fc*(.05 + .8*dif*sh) + fc*.06;
+    lit = mix(lit, nat, LATOFF.z*.55);
+    lit += hot*edge*.08*(1. - LATOFF.z*.6)*smoothstep(.6, .9, n.y);
+    lit = mix(lit, fogc*vec3(.6, .5, .6), clamp(fogA, 0., 1.)*.8);
+    col = mix(col, lit, LAT);
+  }
+  if(WIRE > 0. || CLUS > 0.){
+    // chapter 4: the heightfield as triangles, clusters of 128, LOD grows with distance
+    float lod = max(0., floor(log2(max(t, 1.)/2.2)));
+    float g = .125*exp2(lod);
+    vec2 q = x.xz/g, fq = fract(q);
+    float fw = t/(FOC*R.y)/g*1.1;
+    float e = min(min(fq.x, fq.y), min(1. - fq.x, 1. - fq.y));
+    e = min(e, abs(fq.x - fq.y)*.7071);
+    float wire = 1. - smoothstep(fw*.4, fw*1.4, e);
+    vec2 cid = floor(q/8.);
+    float hh = h12(cid + lod*37.1);
+    vec3 cc = .5 + .5*cos(TAU*(hh + vec3(0., .33, .67)));
+    cc = mix(vec3(dot(cc, vec3(.33))), cc, .75);
+    vec3 cq = fract(vec3(q/8., 0.));
+    float ce = min(min(cq.x, cq.y), min(1. - cq.x, 1. - cq.y));
+    vec3 clus = cc*(.12 + .9*dif*sh + .25*n.y);
+    clus *= mix(.35, 1., smoothstep(0., fw/8.*2., ce));
+    col = mix(col, clus, CLUS);
+    col = mix(col, mix(paper*.9, vec3(.02), CLUS*.6), wire*WIRE*.55*(1. - fogA*.7));
+  }
+  o0 = vec4(col, 1);
+}`;
+
+// ------------------------------------------------------------------ vector layer (lines, dots, cells)
+const VEC_VS = `#version 300 es
+in vec3 P; in vec3 Q; in vec4 C; in float K;
+out vec3 q; out vec4 c; flat out float k;
+void main(){ q = Q; c = C; k = K; gl_Position = vec4(P, 1); }`;
+const VEC_FS = `#version 300 es
+precision highp float;
+in vec3 q; in vec4 c; flat in float k; out vec4 o;
+void main(){
+  float a = c.a;
+  if(k < .5) a *= clamp(q.z + .5 - abs(q.x), 0., 1.);                 // line: q.x px across, q.z half width
+  else if(k < 1.5) a *= clamp(q.z + .5 - length(q.xy), 0., 1.);       // disc: q.xy px offset, q.z radius
+  else if(k < 2.5) a *= exp(-.5*dot(q.xy, q.xy));                      // gaussian
+  if(a < .002) discard;
+  o = vec4(c.rgb*a, a);
+}`;
+const vecProg = program(VEC_VS, VEC_FS, ["P", "Q", "C", "K"]);
+const FL = 11;
+class Batch {
+  constructor() { this.a = new Float32Array(FL * 6 * 20000); this.n = 0; }
+  reset() { this.n = 0; }
+  grow() { const b = new Float32Array(this.a.length * 2); b.set(this.a); this.a = b; }
+  v(x, y, z, qx, qy, qz, c, k) {
+    if ((this.n + 1) * FL > this.a.length) this.grow();
+    const a = this.a, i = this.n++ * FL;
+    a[i] = (x / W) * 2 - 1; a[i + 1] = 1 - (y / H) * 2; a[i + 2] = z;
+    a[i + 3] = qx; a[i + 4] = qy; a[i + 5] = qz; a[i + 6] = c[0]; a[i + 7] = c[1]; a[i + 8] = c[2]; a[i + 9] = c[3]; a[i + 10] = k;
+  }
+  // quad from 4 corners (pixel space) with per-corner q and z
+  quad(p, q, z, c, k) { for (const i of [0, 1, 2, 0, 2, 3]) this.v(p[i][0], p[i][1], z[i], q[i][0], q[i][1], q[i][2], c, k); }
+  seg(x0, y0, x1, y1, w, c, z0 = -1, z1 = -1) {
+    const dx = x1 - x0, dy = y1 - y0, l = Math.hypot(dx, dy) || 1e-6, hw = w / 2, e = hw + 1;
+    const nx = (-dy / l) * e, ny = (dx / l) * e;
+    this.quad([[x0 + nx, y0 + ny], [x1 + nx, y1 + ny], [x1 - nx, y1 - ny], [x0 - nx, y0 - ny]],
+      [[e, 0, hw], [e, 0, hw], [-e, 0, hw], [-e, 0, hw]], [z0, z1, z1, z0], c, 0);
+  }
+  dot(x, y, r, c, z = -1) {
+    const e = r + 1;
+    this.quad([[x - e, y - e], [x + e, y - e], [x + e, y + e], [x - e, y + e]], [[-e, -e, r], [e, -e, r], [e, e, r], [-e, e, r]], [z, z, z, z], c, 1);
+  }
+  rect(x, y, w, h, c) { this.quad([[x, y], [x + w, y], [x + w, y + h], [x, y + h]], [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]], [-1, -1, -1, -1], c, 3); }
+  gauss(x, y, ax, ay, bx, by, c, z = -1) {
+    const s = 3;
+    this.quad([[x - s * ax - s * bx, y - s * ay - s * by], [x + s * ax - s * bx, y + s * ay - s * by], [x + s * ax + s * bx, y + s * ay + s * by], [x - s * ax + s * bx, y - s * ay + s * by]],
+      [[-s, -s, 0], [s, -s, 0], [s, s, 0], [-s, s, 0]], [z, z, z, z], c, 2);
+  }
+}
+const VA = new Batch(), VX = new Batch();
+let CAM = null;
+function clipSeg(c, A, B) {
+  const za = v3.dot(v3.sub(A, c.pos), c.f), zb = v3.dot(v3.sub(B, c.pos), c.f), zn = NEAR * 2;
+  if (za < zn && zb < zn) return null;
+  if (za < zn) A = v3.lerp(A, B, (zn - za) / (zb - za));
+  if (zb < zn) B = v3.lerp(B, A, (zn - zb) / (za - zb));
+  return [proj(c, A), proj(c, B)];
+}
+function seg3(b, A, B, w, c) {
+  const s = clipSeg(CAM, A, B); if (!s) return;
+  const bias = 0.00002;
+  b.seg(s[0].x, s[0].y, s[1].x, s[1].y, w, c, s[0].z - bias, s[1].z - bias);
+}
+function poly3(b, pts, w, c) { for (let i = 1; i < pts.length; i++) seg3(b, pts[i - 1], pts[i], w, c); }
+// dots sit on surfaces; pull them 3% towards the camera so the surface they mark does not hide them
+function dot3(b, P, r, c) { const p = proj(CAM, v3.add(CAM.pos, v3.mul(v3.sub(P, CAM.pos), 0.97))); if (p) b.dot(p.x, p.y, r, c, p.z); }
+function dashed3(b, A, B, w, c, dash = 0.12, phase = 0) {
+  const L = Math.hypot(...v3.sub(B, A)), n = Math.max(1, Math.floor(L / dash));
+  for (let i = 0; i < n; i += 2) seg3(b, v3.lerp(A, B, (i + phase) / n), v3.lerp(A, B, Math.min(1, (i + 1 + phase) / n)), w, c);
+}
+function arrow2(b, x0, y0, x1, y1, w, c, head = 7) {
+  b.seg(x0, y0, x1, y1, w, c);
+  const a = Math.atan2(y1 - y0, x1 - x0);
+  for (const s of [-1, 1]) b.seg(x1, y1, x1 - head * Math.cos(a + s * 0.45), y1 - head * Math.sin(a + s * 0.45), w, c);
+}
+const vbo = gl.createBuffer();
+function drawBatch(b, additive) {
+  if (!b.n) return;
+  gl.useProgram(vecProg);
+  gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+  gl.bufferData(gl.ARRAY_BUFFER, b.a.subarray(0, b.n * FL), gl.STREAM_DRAW);
+  const st = FL * 4;
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, st, 0);
+  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, st, 12);
+  gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.FLOAT, false, st, 24);
+  gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 1, gl.FLOAT, false, st, 40);
+  gl.enable(gl.BLEND);
+  if (additive) gl.blendFunc(gl.ONE, gl.ONE); else gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  gl.drawArrays(gl.TRIANGLES, 0, b.n);
+  gl.disable(gl.BLEND);
+  for (let i = 1; i < 4; i++) gl.disableVertexAttribArray(i);
+}
+
+// ------------------------------------------------------------------ splat pass
+const SPL_VS = `#version 300 es
+precision highp float;
+in vec2 P; in vec2 Q; in vec4 C; in vec3 S;
+uniform sampler2D BEAUTY;
+out vec2 q; out vec4 c;
+void main(){
+  q = Q;
+  vec3 learned = textureLod(BEAUTY, S.xy, 0.).rgb;
+  c = vec4(mix(C.rgb, learned, S.z), C.a);
+  gl_Position = vec4(P, 0, 1);
+}`;
+const SPL_FS = `#version 300 es
+precision highp float;
+in vec2 q; in vec4 c; out vec4 o;
+void main(){ float a = c.a*exp(-.5*dot(q, q)); if(a < .003) discard; o = vec4(c.rgb*a, a); }`;
+const splProg = program(SPL_VS, SPL_FS, ["P", "Q", "C", "S"]);
+const SFL = 11;
+let splArr = new Float32Array(SFL * 6 * 40000), splN = 0;
+const splVbo = gl.createBuffer();
+
+// ------------------------------------------------------------------ post
+const POST = HEAD + `
+in vec2 uv; out vec4 o;
+uniform vec2 R; uniform float T, B, S, SIG, ARCH, FADE, SCRIM, FLASH;
+uniform sampler2D SRC, TXT;
+vec3 aces(vec3 c){ c = max(c, 0.); return clamp(c*(2.51*c + .03)/(c*(2.43*c + .59) + .14), 0., 1.); }
+float h1(float n){ return fract(sin(n*127.1)*43758.5453); }
+void main(){
+  vec2 f = uv*R, u = uv;
+  float fs = floor(S*13.);
+  // tearing: horizontal band shifts, block displacement, macroblock mosh
+  float band = floor(f.y/mix(4., 36., h1(floor(f.y/41.) + fs)));
+  if(h1(band + fs*1.7) < B*.34) u.x += (h1(band*3.1 + fs) - .5)*.28*B;
+  vec2 blk = floor(f/mix(24., 48., h1(floor(S*7.))));
+  if(h12(blk + fs) < B*.07) u += (vec2(h12(blk + 3.1 + fs), h12(blk + 7.7 + fs)) - .5)*vec2(.12, .06)*B;
+  u = clamp(u, vec2(.001), vec2(.999));
+  bool mosh = h12(blk*1.3 + fs + 5.) < B*.05;
+  if(mosh) u = (floor(u*R/8.)*8. + 4.)/R;
+  float ca = .0008 + .014*B*B + .0015*SIG;
+  vec3 col = vec3(texture(SRC, u + vec2(ca, 0)).r, texture(SRC, u).g, texture(SRC, u - vec2(ca, 0)).b);
+  if(mosh) col = col.gbr*1.2;
+  col = aces(col*1.05);
+  // archive grade: a little warmth, a little fade, lifted blacks towards ink
+  float lum = dot(col, vec3(.2126, .7152, .0722));
+  vec3 arch = mix(vec3(lum), col, .82)*vec3(1.03, 1., .95);
+  arch = arch*.94 + vec3(.012, .011, .014);
+  col = mix(col, arch, ARCH);
+  col = pow(col, vec3(1./2.2));
+  // scrims so type stays legible on bright skies
+  float sc = smoothstep(.78, 1., uv.y)*.45 + smoothstep(.30, 0., uv.y)*.5;
+  col *= 1. - SCRIM*sc;
+  col *= 1. - FADE;
+  vec4 tx = texture(TXT, vec2(u.x, 1. - u.y));
+  col = mix(col, tx.rgb, tx.a);
+  col *= .95 + .05*sin(f.y*3.14159);
+  vec2 v = uv - .5;
+  col *= 1. - dot(v*vec2(.75, 1.1), v*vec2(.75, 1.1))*.9;
+  col += (h12(f + fs + T*60.) - .5)*(.03 + .05*B);
+  if(B > .92 && h1(fs) < .5) col = 1. - col;
+  col = mix(col, vec3(1.), FLASH);
+  o = vec4(clamp(col, 0., 1.), 1);
+}`;
+const sceneProg = program(VS_FULL, SCENE, ["p"]);
+const postProg = program(VS_FULL, POST, ["p"]);
+const triBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, triBuf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+function fullTri() {
+  gl.bindBuffer(gl.ARRAY_BUFFER, triBuf);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+// ------------------------------------------------------------------ places in the world
+// (chosen by looking at the heightfield; positions are world units, heights follow the terrain)
+const ground = (x, z, up) => [x, hAt(x, z) + up, z];
+const SUNA = 2.35;
+const SUN_DIR = (e) => v3.norm([Math.sin(SUNA) * Math.cos(e), Math.sin(e), Math.cos(SUNA) * Math.cos(e)]);
+const SUN_E = 0.13;
+const DAWN0 = cam([10.0, 1.9, 22.8], 2.75, -0.12);
+const DAWN1 = cam([10.4, 1.86, 21.9], 2.78, -0.11);
+const TOP_C = [DAWN0.pos[0] + DAWN0.f[0] * 7, DAWN0.pos[2] + DAWN0.f[2] * 7];
+const VAL0 = cam([16.5, 2.2, 19.5], 3.9, -0.28);
+const VAL1 = cam([16.15, 2.14, 19.05], 3.95, -0.27);
+const ROCK_P = [13.19, 0, 13.81];
+const WIDE0 = cam([10, 6.5, 2], 0.28, -0.38);
+const WIDE1 = cam([11.6, 6.25, 3.3], 0.22, -0.37);
+
+// ------------------------------------------------------------------ timeline
+const CH = TL.chapters;
+const OUT = TL.outro;
+const chapterAt = (t) => CH.find((c) => t >= c.start && t < c.end) ?? null;
+const shotAt = (c, t) => c.shots.find((s) => t >= s.start && t < s.end) ?? c.shots.at(-1);
+
+// bursts: breaches, cuts in/out of signal shots, a few aftershocks while the signal runs, shouts, outro
 const BURSTS = [];
 {
   const r = rng(4242);
-  for (const s of TL.scenes) {
-    if (s.start > 0) BURSTS.push({ t: s.start - 0.12, d: 0.3, p: 0.85 });
-    if (s.breach) {
-      BURSTS.push({ t: s.breach, d: 0.9, p: 1 });
-      for (let t = s.breach + 1.2; t < s.end - 2.8; t += 0.5 + r() * 0.9) BURSTS.push({ t, d: 0.12 + r() * 0.25, p: 0.25 + r() * 0.4 });
-      BURSTS.push({ t: s.end - 2.4, d: 0.35, p: 0.9 });
+  BURSTS.push({ t: TL.boot.end - 0.06, d: 0.18, p: 0.5 });
+  for (const c of CH) {
+    if (c.id > 1) BURSTS.push({ t: c.start - 0.05, d: 0.14, p: 0.3 });
+    BURSTS.push({ t: c.breach, d: 0.42, p: 1 });
+    c.shots.forEach((s, i) => { if (s.signal || (i > 0 && c.shots[i - 1].signal)) BURSTS.push({ t: s.start - 0.04, d: 0.14, p: 0.7 }); });
+    const world = c.shots.filter((s) => !s.signal && s.start > c.breach);
+    for (const s of world) {
+      const gap = 2.1 - c.id * 0.2;
+      for (let t = s.start + 0.9 + r() * 0.5; t < s.end - 0.6; t += gap + r() * 0.8) if (Math.abs(t - c.shoutAt) > 0.5) BURSTS.push({ t, d: 0.07 + r() * 0.08, p: 0.1 + 0.05 * c.id + r() * 0.1 });
     }
+    BURSTS.push({ t: c.shoutAt - 0.16, d: 0.18, p: 0.7 });
   }
-  BURSTS.push({ t: 56.2, d: 0.5, p: 0.9 }, { t: 57.9, d: 0.25, p: 1 });
+  BURSTS.push({ t: OUT.collapse, d: 0.25, p: 0.55 }, { t: OUT.card - 0.05, d: 0.2, p: 1 });
+  // keep the shouts clean: drop small aftershocks that land inside a shout
+  for (let i = BURSTS.length - 1; i >= 0; i--) if (BURSTS[i].p < 0.45 && CH.some((c) => BURSTS[i].t > c.shoutAt - 0.3 && BURSTS[i].t < c.shoutAt + 1.7)) BURSTS.splice(i, 1);
 }
 const burstAt = (t) => {
   let b = 0;
@@ -423,159 +711,957 @@ const burstAt = (t) => {
   return b;
 };
 
-// typed text (terminal logs + boot + outro): one entry per line, used for audio clicks too
+// typed text (boot, logs, outro): one entry per line, shared with the soundtrack
 const TYPED = [];
-const CPS = 34;
-TL.scenes.filter((s) => s.log).forEach((s) => s.log.forEach((line, i) => TYPED.push({ t: s.breach + 0.5 + i * 1.15, text: line, scene: s.id })));
-["SIGGRAPH ARCHIVE  1974 — 2026", "INDEXING 50 YEARS OF PAPERS", "PLAYBACK: NOMINAL"].forEach((line, i) => TYPED.push({ t: 0.4 + i * 1.05, text: line, scene: 0 }));
-TL.outro.forEach((line, i) => TYPED.push({ t: 52.4 + i * 1.25, text: line, scene: 5, serif: true }));
-const typed = (e, t) => e.text.slice(0, clamp(Math.floor((t - e.t) * CPS), 0, e.text.length));
+const CPS = 32;
+TL.boot.lines.forEach((line, i) => TYPED.push({ t: 0.25 + i * 0.7, text: line, scene: 0 }));
+for (const c of CH) c.log.forEach((line, i) => TYPED.push({ t: c.breach + 0.45 + i * 1.2, text: line, scene: c.id }));
+OUT.lines.forEach((line, i) => TYPED.push({ t: OUT.start + 0.35 + i * 1.3, text: line, scene: 5, cps: 22 }));
+const typed = (e, t) => e.text.slice(0, clamp(Math.floor((t - e.t) * (e.cps ?? CPS)), 0, e.text.length));
 
-window.EVENTS = { bursts: BURSTS, typed: TYPED.map((e) => ({ t: e.t, n: e.text.length, cps: CPS })), scenes: TL.scenes, fps: FPS, frames: FRAMES };
+window.EVENTS = {
+  fps: FPS, frames: FRAMES, bursts: BURSTS,
+  typed: TYPED.map((e) => ({ t: e.t, n: e.text.length, cps: e.cps ?? CPS })),
+  chapters: CH.map((c) => ({ id: c.id, start: c.start, end: c.end, breach: c.breach, shoutAt: c.shoutAt, shots: c.shots })),
+  boot: TL.boot, outro: OUT,
+};
 
-function aiAt(s, t) {
-  if (s.id === 5) return smooth((t - 55.4) / 1.2) * (t < 57.9 ? 1 : 0);
-  if (!s.breach) return 0;
-  return clamp((t - s.breach - 0.4) / (s.end - s.breach - 1.2));
-}
+// ------------------------------------------------------------------ precomputed signal data
+// S1: samples from N(0, I) pushed through the exact score of a toy density shaped like our ridge line.
+const PROF_Z = 17.0;
+const prof = (u) => (hAt(4 + (u + 3.6) * (24 / 7.2), PROF_Z) - 0.2) * 0.42 - 0.35;   // plot units, u in [-3.6, 3.6]
+const ABAR = (() => { const a = []; let p = 1; for (let i = 0; i < 1000; i++) { p *= 1 - (1e-4 + (0.02 - 1e-4) * i / 999); a.push(p); } return a; })();
+const S1 = (() => {
+  const r = rng(77), M = 520, refs = [];
+  while (refs.length < M) {
+    const u = (r() * 2 - 1) * 3.5, top = prof(u), v = top + Math.log(Math.max(r(), 1e-6)) * 0.16;
+    if (v > -1.35) refs.push([u, v]);
+  }
+  const P = 1500, K = 44, hk = 0.05, traj = [];
+  const lev = [...Array(K + 1)].map((_, k) => Math.round((999 * (K - k)) / K));   // t index from 999 down to 0
+  const score = (x, y, ab) => {
+    const sa = Math.sqrt(ab), s2 = 1 - ab + ab * hk * hk;
+    let sw = 0, gx = 0, gy = 0, mx = -1e9;
+    const d2s = new Float64Array(M);
+    for (let j = 0; j < M; j++) { const dx = sa * refs[j][0] - x, dy = sa * refs[j][1] - y; d2s[j] = -(dx * dx + dy * dy) / (2 * s2); if (d2s[j] > mx) mx = d2s[j]; }
+    for (let j = 0; j < M; j++) { const w = Math.exp(d2s[j] - mx); sw += w; gx += w * (sa * refs[j][0] - x); gy += w * (sa * refs[j][1] - y); }
+    return [gx / sw / s2, gy / sw / s2];
+  };
+  for (let i = 0; i < P; i++) {
+    let x = gaussR(r), y = gaussR(r);
+    const tr = [[x, y]];
+    for (let k = 0; k < K; k++) {
+      const a = ABAR[lev[k]], b = ABAR[lev[k + 1]];
+      const [sx, sy] = score(x, y, a);
+      const e1 = -Math.sqrt(1 - a) * sx, e2 = -Math.sqrt(1 - a) * sy;           // predicted noise
+      const x0 = (x - Math.sqrt(1 - a) * e1) / Math.sqrt(a), y0 = (y - Math.sqrt(1 - a) * e2) / Math.sqrt(a);
+      const sig = k === K - 1 ? 0 : Math.sqrt(((1 - b) / (1 - a)) * (1 - a / b));
+      const c = Math.sqrt(Math.max(0, 1 - b - sig * sig));
+      x = Math.sqrt(b) * x0 + c * e1 + sig * gaussR(r);
+      y = Math.sqrt(b) * y0 + c * e2 + sig * gaussR(r);
+      tr.push([x, y]);
+    }
+    traj.push(tr);
+  }
+  return { refs, traj, K, score };
+})();
+// S2: 1D reverse SDE onto a three-mode density (valley floors, slopes, ridges)
+const S2 = (() => {
+  const comps = [[-1.9, 0.13, 0.3], [0.2, 0.16, 0.42], [2.0, 0.12, 0.28]];
+  const pdf = (y) => comps.reduce((s, [m, sd, w]) => s + (w * Math.exp(-((y - m) ** 2) / (2 * sd * sd))) / (sd * Math.sqrt(2 * Math.PI)), 0);
+  const score = (y, ab) => {
+    let num = 0, den = 0;
+    for (const [m, sd, w] of comps) {
+      const mu = Math.sqrt(ab) * m, s2 = ab * sd * sd + 1 - ab;
+      const g = (w * Math.exp(-((y - mu) ** 2) / (2 * s2))) / Math.sqrt(s2);
+      num += (g * (mu - y)) / s2; den += g;
+    }
+    return num / Math.max(den, 1e-12);
+  };
+  const r = rng(99), P = 160, K = 120, paths = [];
+  for (let i = 0; i < P; i++) {
+    let y = gaussR(r);
+    const tr = [y];
+    for (let k = 0; k < K; k++) {
+      const ia = Math.round((999 * (K - k)) / K), ib = Math.round((999 * (K - k - 1)) / K);
+      const a = ABAR[ia], b = ABAR[ib];
+      const e = -Math.sqrt(1 - a) * score(y, a), y0 = (y - Math.sqrt(1 - a) * e) / Math.sqrt(a);
+      const sig = k === K - 1 ? 0 : Math.sqrt(((1 - b) / (1 - a)) * (1 - a / b));
+      y = Math.sqrt(b) * y0 + Math.sqrt(Math.max(0, 1 - b - sig * sig)) * e + sig * gaussR(r);
+      tr.push(y);
+    }
+    paths.push(tr);
+  }
+  return { pdf, paths, K };
+})();
+// chapter 2: light paths from a camera gizmo, real ray casts against the heightfield
+const GIZMO = { pos: null, f: null };
+const PATHS = (() => {
+  const gx = VAL0.pos[0] + VAL0.f[0] * 3.3 - VAL0.r[0] * 0.55, gz = VAL0.pos[2] + VAL0.f[2] * 3.3 - VAL0.r[2] * 0.55;
+  const gp = ground(gx, gz, 0.45);
+  const tgt = [12.9, hAt(12.9, 15.0) + 0.1, 15.0];
+  const f = v3.norm(v3.sub(tgt, gp)), rr = v3.norm(v3.cross(f, [0, 1, 0])), uu = v3.cross(rr, f);
+  GIZMO.pos = gp; GIZMO.f = f; GIZMO.r = rr; GIZMO.u = uu;
+  const r = rng(5), sun = SUN_DIR(SUN_E), out = [];
+  for (let i = 0; i < 34; i++) {
+    let d = v3.norm(v3.add(f, v3.add(v3.mul(rr, (r() - 0.5) * 0.9), v3.mul(uu, (r() - 0.5) * 0.5))));
+    let o = gp;
+    const verts = [o], shadows = [];
+    let escaped = null;
+    for (let b = 0; b < 4; b++) {
+      const t = castRay(o, d, 30);
+      if (t === null) { escaped = v3.add(o, v3.mul(d, 2.2)); break; }
+      const x = v3.add(o, v3.mul(d, t)), n = nAt(x[0], x[2]);
+      verts.push(x);
+      const so = v3.add(x, v3.mul(n, 0.02)), st = castRay(so, sun, 25);
+      shadows.push({ from: x, to: st === null ? v3.add(x, v3.mul(sun, 1.6)) : v3.add(so, v3.mul(sun, st)), lit: st === null });
+      // cosine-weighted bounce
+      const a = 2 * Math.PI * r(), z = r(), s = Math.sqrt(z);
+      const tx = v3.norm(v3.cross(n, Math.abs(n[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0])), ty = v3.cross(n, tx);
+      d = v3.norm(v3.add(v3.add(v3.mul(tx, s * Math.cos(a)), v3.mul(ty, s * Math.sin(a))), v3.mul(n, Math.sqrt(1 - z))));
+      o = v3.add(x, v3.mul(n, 0.02));
+    }
+    out.push({ verts, shadows, escaped, train: i % 7 === 3 });
+  }
+  return out;
+})();
+// chapter 4: optimisers descending the terrain read as a loss
+const OPT = (() => {
+  const r = rng(31), out = [];
+  for (let i = 0; i < 18; i++) {
+    let x = 9 + r() * 14, z = 7 + r() * 14, vx = 0, vz = 0;
+    const tr = [];
+    for (let k = 0; k < 260; k++) {
+      tr.push([x, hAt(x, z) + 0.03, z]);
+      const e = 0.05, gx = (hAt(x + e, z) - hAt(x - e, z)) / (2 * e), gz = (hAt(x, z + e) - hAt(x, z - e)) / (2 * e);
+      vx = 0.86 * vx - 0.05 * gx + (r() - 0.5) * 0.012; vz = 0.86 * vz - 0.05 * gz + (r() - 0.5) * 0.012;
+      x += vx; z += vz;
+    }
+    out.push(tr);
+  }
+  return out;
+})();
+// chapter 4: Gaussian splats anchored on the terrain, seen from the wide camera
+const SPL = (() => {
+  const c = camLerp(WIDE0, WIDE1, 0.75), r = rng(123), list = [];
+  const gw = 312, gh = 176;
+  const add = (px, py, gen) => {
+    const d = pixelRay(c, px, py), t = castRay(c.pos, d, 80);
+    if (t === null) return;
+    const X = v3.add(c.pos, v3.mul(d, t)), n = nAt(X[0], X[2]);
+    const tx = v3.norm(v3.cross(n, [Math.cos(r() * 6.28), 0, Math.sin(r() * 6.28)])), ty = v3.cross(n, tx);
+    const foot = (t / (FOC * H)) * (W * 1.3 / gw) * (1 + 0.45 * clamp((py - H * 0.45) / (H * 0.6))), an = 0.8 + r() * 0.9;
+    list.push({ X, n, tx, ty, s1: foot * 0.62 * an, s2: foot * 0.62 / an, gen, seed: r(),
+      init: v3.add(v3.add(c.pos, v3.mul(c.f, 9)), [gaussR(r) * 0.9, 1.4 + gaussR(r) * 0.9, gaussR(r) * 0.9]),
+      col: [[1, 0.03, 0.12], [0.03, 0.8, 1], [0.83, 0.82, 0.78]][Math.floor(r() * 3)], floater: r() < 0.0012 && py < H * 0.5, prune: r() < 0.07,
+      mid: null });
+  };
+  for (let j = 0; j < gh; j++) for (let i = 0; i < gw; i++) add(((i + r()) / gw) * W * 1.3 - W * 0.15, ((j + r()) / gh) * H * 1.25 - H * 0.12, i % 2 === 0 && j % 2 === 0 ? 0 : 1 + ((i + j) % 2));
+  for (const s of list) if (s.floater) s.mid = v3.add(v3.lerp(s.init, s.X, 0.55 + s.seed * 0.3), [0, 0.5, 0]);
+  return list;
+})();
 
 // ------------------------------------------------------------------ typography
 const tc = document.createElement("canvas"); tc.width = W; tc.height = H;
 const cx = tc.getContext("2d");
-const HOT = "#ff2e63", PAPER = "#ecebe6", DIM = "rgba(236,235,230,.55)";
+const HOT = "#ff2e63", CYAN = "#27e6ff", PAPER = "#ecebe6", DIM = "rgba(236,235,230,.62)", INKC = "#060608";
+const MONO = (px) => `500 ${px}px Mono, "DejaVu Sans Mono", monospace`;
+const SERIF = (px, it = false) => `${it ? "italic " : ""}400 ${px}px Serif, FreeSerif, serif`;
 const GLY = "█▓▒░<>/\\=+*#%&$@01";
 function scramble(str, amount, r) { return str.split("").map((c) => (c !== " " && r() < amount ? GLY[(r() * GLY.length) | 0] : c)).join(""); }
-
-function drawText(t, frame, s, ai, burst) {
-  const r = rng(frame * 7919 + 1);
-  cx.clearRect(0, 0, W, H);
-  cx.textBaseline = "alphabetic";
-  const m = 34;
-  const tcode = (x) => { const f = Math.floor(x * FPS); return [0, Math.floor(x / 60), Math.floor(x) % 60, f % FPS].map((n) => String(n).padStart(2, "0")).join(":"); };
-
-  // header
-  if (s.id >= 1 && s.id <= 4) {
-    cx.font = "500 11px Mono"; cx.fillStyle = DIM;
-    cx.fillText("SIGGRAPH ARCHIVE — PLAYBACK", m, m);
-    cx.textAlign = "right";
-    cx.fillStyle = ai > 0 ? HOT : DIM;
-    cx.fillText(ai > 0 ? `● INTRUSION  ${tcode(t)}` : `TC ${tcode(t)}`, W - m, m);
-    cx.textAlign = "left";
+// formulas: "_x" / "_{..}" subscripts, "^x" / "^{..}" superscripts
+function rich(str, x, y, px, align = "left", it = true, measure = false) {
+  const toks = [];
+  for (let i = 0; i < str.length;) {
+    const ch = str[i];
+    if (ch === "_" || ch === "^") {
+      let arg;
+      if (str[i + 1] === "{") { const j = str.indexOf("}", i + 2); arg = str.slice(i + 2, j); i = j + 1; } else { arg = str[i + 1]; i += 2; }
+      toks.push({ s: arg, k: ch });
+    } else { let j = i; while (j < str.length && str[j] !== "_" && str[j] !== "^") j++; toks.push({ s: str.slice(i, j), k: "" }); i = j; }
   }
+  const font = (k) => SERIF(k ? Math.round(px * 0.62) : px, it);
+  let w = 0;
+  for (const tk of toks) { cx.font = font(tk.k); tk.w = cx.measureText(tk.s).width; w += tk.w; }
+  if (measure) return w;
+  let xx = align === "right" ? x - w : align === "center" ? x - w / 2 : x;
+  const prevAlign = cx.textAlign; cx.textAlign = "left";
+  for (const tk of toks) { cx.font = font(tk.k); cx.fillText(tk.s, xx, y + (tk.k === "_" ? px * 0.22 : tk.k === "^" ? -px * 0.38 : 0)); xx += tk.w; }
+  cx.textAlign = prevAlign;
+  return w;
+}
+const tcode = (x) => { const f = Math.floor(x * FPS + 1e-6); return [0, Math.floor(x / 60), Math.floor(x) % 60, f % FPS].map((n) => String(n).padStart(2, "0")).join(":"); };
+const fmt = (n) => Math.round(n).toLocaleString("en-US");
 
-  // boot
-  if (s.id === 0) {
-    cx.font = "500 13px Mono"; cx.fillStyle = PAPER;
-    TYPED.filter((e) => e.scene === 0 && t >= e.t).forEach((e, i) => cx.fillText(typed(e, t) + (i === 2 && Math.floor(t * 3) % 2 ? " _" : ""), m * 2, H / 2 - 24 + i * 22));
+// ------------------------------------------------------------------ per-shot direction
+// Each shot sets uniforms (U), a camera, vector geometry and its own labels (lab).
+function defaults() {
+  return { DSKY: 0, INK: 0, BUILD: 0, HS: 1, wA: [1, 1, 1, 1], wB: [1, 1], CLAY: 0, TOPO: 0, SUNE: SUN_E, CLOUD: 1, LAT: 0, LATOFF: [0, 0, 0],
+    MC: 0, CACHE: 0, STEP: 0, ROUGH: 0.55, SPEC: 0.35, NEU: 0, WIRE: 0, CLUS: 0, LOSS: 0, SPL: 0, ARCH: 1, SIG: 0, SCRIM: 1, FADE: 0, FLASH: 0 };
+}
+const topCam = (alt, k = 0) => cam([TOP_C[0], alt, TOP_C[1] + k], Math.PI, -Math.PI / 2 + 1e-4);
+const dawnCam = (t) => camLerp(DAWN0, DAWN1, clamp((t - 8.6) / (18 - 8.6)));
+const valCam = (t) => camLerp(VAL0, VAL1, clamp((t - 18) / 11));
+const rockCam = (t) => {
+  const a = SUNA + 1.62 + (t - 29) * 0.035, d = 1.45, P = ground(ROCK_P[0], ROCK_P[2], 0.0);
+  const pos = [P[0] + Math.sin(a) * d, 0, P[2] + Math.cos(a) * d];
+  pos[1] = Math.max(P[1] + 0.32, hAt(pos[0], pos[2]) + 0.3);
+  return look(pos, [P[0], P[1] + 0.3, P[2]]);
+};
+const wideCam = (t) => camLerp(WIDE0, WIDE1, clamp((t - 40) / 20));
+const octW = (k, lt) => (k === 0 ? 1 : ramp(lt, 0.1 + 0.36 * (k - 1), 0.4 + 0.36 * (k - 1)));
+const LAB = [];   // deferred labels: functions drawn after the HUD scrim decisions
+const lab = (fn) => LAB.push(fn);
+const COL = { paper: [0.83, 0.82, 0.78], hot: [1, 0.027, 0.12], cyan: [0.02, 0.8, 1], gold: [1.0, 0.62, 0.3], grey: [0.5, 0.5, 0.52] };
+const ca = (c, a) => [c[0], c[1], c[2], a];
+
+// plot frame used by every signal shot
+function sigFrame(x0, y0, x1, y1, tag, lt) {
+  const a = ramp(lt, 0, 0.15);
+  const c = ca(COL.paper, 0.22 * a);
+  VA.seg(x0, y0, x1, y0, 1, c); VA.seg(x0, y1, x1, y1, 1, c); VA.seg(x0, y0, x0, y1, 1, c); VA.seg(x1, y0, x1, y1, 1, c);
+  for (let x = x0; x <= x1 + 0.1; x += (x1 - x0) / 12) { VA.seg(x, y1, x, y1 + 4, 1, c); }
+  lab(() => { cx.font = MONO(10); cx.fillStyle = HOT; cx.textAlign = "left"; cx.fillText(tag, x0, y0 - 8); });
+}
+
+const SH = {
+  lattice(t, lt, U) {
+    U.BUILD = 1; U.HS = 0; U.CLAY = 1; U.TOPO = 1; U.CLOUD = 0; U.wA = [ramp(lt, 0.15, 1.2), 0, 0, 0]; U.wB = [0, 0];
+    const c = topCam(18.5 - lt * 0.4);
+    const aL = ramp(lt, 0, 0.5), aG = ramp(lt, 0.35, 0.9);
+    latticeLines(c, 4, 0.3 * aL);
+    gradArrows(c, aG);
+    return c;
+  },
+  octaves(t, lt, U) {
+    U.BUILD = 1; U.HS = 0; U.CLAY = 1; U.TOPO = 1; U.CLOUD = 0;
+    const w = [0, 1, 2, 3, 4, 5].map((k) => octW(k, lt));
+    U.wA = [w[0], w[1] * 0.5, w[2] * 0.25, w[3] * 0.125]; U.wB = [w[4] * 0.0625, w[5] * 0.03125];
+    const c = topCam(17.74 - lt * 0.5);
+    latticeLines(c, 4, 0.3 * (1 - ramp(lt, 0, 0.5)));
+    gradArrows(c, 1 - ramp(lt, 0, 0.4));
+    for (let k = 1; k <= 3; k++) { const t0 = 0.1 + 0.36 * (k - 1); latticeLines(c, 4 / 2 ** k, 0.32 * ramp(lt, t0, t0 + 0.1) * (1 - ramp(lt, t0 + 0.25, t0 + 0.7))); }
+    return c;
+  },
+  rise(t, lt, U) {
+    U.BUILD = 1; U.CLAY = 1; U.TOPO = 1; U.CLOUD = 0; U.wA = [1, 0.5, 0.25, 0.125]; U.wB = [0.0625, 0.03125];
+    const k = smooth(lt / 2.2);
+    U.HS = ramp(lt, 0.0, 1.7);
+    const a = topCam(16.74);
+    const c = cam(v3.lerp(a.pos, DAWN0.pos, smooth(k * 1.05)), lerp(Math.PI, DAWN0.yaw, smooth(k)), lerp(-Math.PI / 2 + 1e-4, DAWN0.pitch, smooth(k)));
+    return c;
+  },
+  dawn(t, lt, U) {
+    U.CLAY = 1 - ramp(lt, 0, 1.3); U.TOPO = U.CLAY; U.CLOUD = ramp(lt, 0.4, 2.4); U.SUNE = lerp(-0.07, SUN_E, ramp(lt, 0.2, 2.6));
+    return dawnCam(t);
+  },
+  "sig-samples"(t, lt, U) {
+    U.INK = 1; U.SIG = 1; U.ARCH = 0; U.SCRIM = 0;
+    const x0 = 120, x1 = 840, y0 = 150, y1 = 394, sc = 80, ox = 480, oy = 262;
+    sigFrame(x0, y0, x1, y1, "S1 · SAMPLING  x_T ~ N(0, I)  →  x_0 ~ p_data", lt);
+    const K = S1.K, prog = ramp(lt, 0.12, 1.3), kf = prog * K, k0 = Math.min(K - 1, Math.floor(kf)), fr = kf - k0;
+    const toPx = (p) => [ox + p[0] * sc, oy - p[1] * sc];
+    const inFrame = (q) => q[0] > x0 + 2 && q[0] < x1 - 2 && q[1] > y0 + 2 && q[1] < y1 - 2;
+    // score field of p_t at the current noise level
+    const ab = ABAR[Math.round(999 * (1 - prog))];
+    for (let gy = y0 + 18; gy < y1; gy += 30) for (let gx = x0 + 20; gx < x1; gx += 30) {
+      const [sx, sy] = S1.score((gx - ox) / sc, (oy - gy) / sc, ab);
+      const m = Math.hypot(sx, sy), l = Math.min(13, 4 + m * 1.6);
+      if (m < 1e-6) continue;
+      arrow2(VX, gx, gy, gx + (sx / m) * l, gy - (sy / m) * l, 1, ca(COL.cyan, 0.2), 3.5);
+    }
+    // data silhouette (faint) once samples approach it
+    const aD = ramp(lt, 0.9, 1.35);
+    for (let i = 0; i < 180; i++) { const u0 = -3.5 + (7 * i) / 180, u1 = u0 + 7 / 180; VA.seg(...toPx([u0, prof(u0)]), ...toPx([u1, prof(u1)]), 1, ca(COL.paper, 0.35 * aD)); }
+    for (const tr of S1.traj) {
+      const a = tr[k0], b = tr[k0 + 1], p = [lerp(a[0], b[0], fr), lerp(a[1], b[1], fr)];
+      const q = toPx(p);
+      if (!inFrame(q)) continue;
+      const kk = kf / K, c = [lerp(0.02, 1, kk), lerp(0.8, 0.6, kk * kk), lerp(1, 0.6, kk)];
+      const back = tr[Math.max(0, k0 - 1)], qb = toPx(back);
+      if (k0 > 26 && inFrame(qb)) VX.seg(qb[0], qb[1], q[0], q[1], 1, ca(c, 0.1));
+      VX.dot(q[0], q[1], 1.3, ca(c, 0.85));
+    }
+    lab(() => {
+      cx.font = MONO(11); cx.textAlign = "right"; cx.fillStyle = HOT;
+      cx.fillText(`t = ${String(Math.round(1000 * (1 - prog))).padStart(4, "0")}`, W - 34, 54);
+      cx.fillStyle = "rgba(255,46,99,.8)"; cx.fillText("SCORE ∇log p_t(x) · EXACT, TOY DENSITY", W - 34, 70);
+    });
+    return null;
+  },
+  "sig-sde"(t, lt, U) {
+    U.INK = 1; U.SIG = 1; U.ARCH = 0; U.SCRIM = 0;
+    const x0 = 150, x1 = 790, y0 = 150, y1 = 394, oy = 272, sc = 40;
+    sigFrame(x0, y0, x1, y1, "S2 · REVERSE SDE   t = 1000 → 0", lt);
+    const prog = ramp(lt, 0.05, 1.2), K = S2.K;
+    const px = (k) => x0 + 46 + ((x1 - x0 - 92) * k) / K;
+    const clipY = (y) => clamp(y, y0 + 3, y1 - 3);
+    // N(0,1) on the left, p_data on the right
+    for (let i = 0; i < 90; i++) {
+      const y0v = -2.9 + (5.8 * i) / 90, y1v = y0v + 5.8 / 90;
+      const g = (y) => Math.exp(-y * y / 2) / Math.sqrt(2 * Math.PI);
+      VA.seg(x0 + 40 - g(y0v) * 70, oy - y0v * sc, x0 + 40 - g(y1v) * 70, oy - y1v * sc, 1.2, ca(COL.cyan, 0.8));
+      VA.seg(x1 - 40 + S2.pdf(y0v) * 30, oy - y0v * sc, x1 - 40 + S2.pdf(y1v) * 30, oy - y1v * sc, 1.2, ca(COL.paper, 0.8 * ramp(lt, 0.75, 1.1)));
+    }
+    const kEnd = prog * K;
+    S2.paths.forEach((tr, i) => {
+      const hi = i % 32 === 5;
+      for (let k = 0; k < Math.min(K, Math.ceil(kEnd)); k++) {
+        const fr = Math.min(1, kEnd - k), a = tr[k], b = lerp(tr[k], tr[k + 1], fr);
+        const kk = k / K, c = [lerp(0.02, 1, kk), lerp(0.8, 0.1, kk), lerp(1, 0.35, kk)];
+        const ya = oy - a * sc, yb = oy - b * sc;
+        if ((ya < y0 && yb < y0) || (ya > y1 && yb > y1)) continue;
+        VX.seg(px(k), clipY(ya), px(k + fr), clipY(yb), hi ? 1.4 : 1, ca(hi ? COL.paper : c, hi ? 0.75 : 0.14));
+      }
+    });
+    lab(() => {
+      cx.font = MONO(10); cx.fillStyle = CYAN; cx.textAlign = "center"; cx.fillText("N(0, 1)", x0 + 40, y1 - 8);
+      cx.fillStyle = PAPER; cx.globalAlpha = ramp(lt, 0.75, 1.1); cx.fillText("p_data", x1 - 40, y1 - 8); cx.globalAlpha = 1;
+      cx.textAlign = "right"; cx.fillStyle = HOT; cx.font = MONO(11);
+      cx.fillText(`t = ${String(Math.round(1000 * (1 - prog))).padStart(4, "0")}`, W - 34, 54);
+      cx.fillStyle = PAPER; rich("dx = [f(x, t) − g(t)^2 ∇_x log p_t(x)] dt + g(t) dw̄", x1, y0 - 9, 19, "right");
+    });
+    return null;
+  },
+  latent(t, lt, U) {
+    const p = ramp(lt, 0.2, 2.7);
+    U.LAT = 1; U.DSKY = 0.95; U.LATOFF = [5.3, -3.1, smooth((p - 0.6) / 0.4)]; U.STEP = Math.floor(t * 12); U.SUNE = SUN_E; U.ARCH = 0.3; U.SIG = 0.5;
+    fillLatent(t, p);
+    latentInset(p, t);
+    const step = Math.round(1000 * (1 - p));
+    lab(() => {
+      cx.font = MONO(11); cx.textAlign = "right"; cx.fillStyle = HOT;
+      cx.fillText(`t = ${String(step).padStart(4, "0")} · x̂₀ = D(z_t)`, W - 34, 54);
+      cx.fillStyle = "rgba(255,46,99,.8)"; cx.fillText(`LOSS ${(0.004 + 0.3 * (1 - p) ** 2 + 0.002 * Math.sin(t * 40)).toFixed(4)}`, W - 34, 70);
+    });
+    return dawnCam(t);
+  },
+  paths(t, lt, U) {
+    const spp = 2 ** Math.min(8, Math.floor(lt / 0.62));
+    U.MC = 0.9 / Math.sqrt(spp);
+    const c = valCam(t);
+    drawGizmo(1);
+    drawPaths(lt, false, 1);
+    lab(() => { cx.font = MONO(11); cx.textAlign = "right"; cx.fillStyle = DIM; cx.fillText(`SPP ${spp} · BOUNCES ≤ 4 · NEE`, W - 34, 54); cx.fillText(`PATHS SHOWN: ${PATHS.length} OF ${fmt(W * H * spp)}`, W - 34, 70); });
+    return c;
+  },
+  "sig-cut"(t, lt, U) {
+    U.INK = 1; U.SIG = 1; U.ARCH = 0; U.SCRIM = 0;
+    sigCut(lt);
+    return null;
+  },
+  cache(t, lt, U) {
+    U.CACHE = 1; U.DSKY = 0.85; U.STEP = Math.floor((t - 25) * 8); U.ARCH = 0.35; U.SIG = 0.5;
+    const c = valCam(t);
+    drawGizmo(1);
+    drawPaths(6 + lt, true, 1);
+    netGlyph(820, 150, lt, ramp(lt, 0.2, 0.7));
+    lab(() => { cx.font = MONO(11); cx.textAlign = "right"; cx.fillStyle = HOT; cx.fillText(`PATH LENGTH 1 · CACHE QUERIES ${fmt(W * H)}`, W - 34, 54);
+      cx.fillStyle = "rgba(255,46,99,.8)"; cx.fillText(`TRAIN STEP ${fmt(1200 + U.STEP * 37)} · LOSS ${(0.02 + 0.2 / (1 + U.STEP * 0.2)).toFixed(4)}`, W - 34, 70); });
+    return c;
+  },
+  lobe(t, lt, U) {
+    const m = lt < 2.6 ? lerp(0.15, 0.5, ramp(lt, 0.4, 2.4)) : lerp(0.5, 0.25, ramp(lt, 2.8, 4.4));
+    U.ROUGH = m; U.SPEC = 1;
+    const c = rockCam(t);
+    drawLobe(m, ramp(lt, 0.3, 1.0), 0, t);
+    microInset(m, ramp(lt, 0.6, 1.2), 0, t);
+    lab(() => { cx.font = MONO(11); cx.textAlign = "right"; cx.fillStyle = DIM; cx.fillText(`BECKMANN D · m = ${m.toFixed(2)}`, W - 34, 54); cx.fillText("F SCHLICK · G MIN(1, 2(N·H)(N·V)/(V·H), …)", W - 34, 70);
+      cx.fillStyle = PAPER; rich("D = exp(−tan²α / m²) / (m² cos⁴α)", W - 34, 430, 20, "right"); });
+    return c;
+  },
+  "sig-weights"(t, lt, U) {
+    U.INK = 1; U.SIG = 1; U.ARCH = 0; U.SCRIM = 0;
+    sigWeights(lt, t);
+    return null;
+  },
+  neural(t, lt, U) {
+    U.NEU = 1; U.DSKY = 0.88; U.ROUGH = 0.25; U.SPEC = 1; U.STEP = t * 24; U.ARCH = 0.35; U.SIG = 0.5;
+    const c = rockCam(t);
+    drawLobe(0.25, 1, ramp(lt, 0, 0.8), t);
+    lab(() => { cx.font = MONO(11); cx.textAlign = "right"; cx.fillStyle = HOT; cx.fillText("LATENT z(x) 8 CH · MLP DECODER", W - 34, 54);
+      cx.fillStyle = "rgba(255,46,99,.8)"; cx.fillText(`STEP ${fmt(18000 + (t - 36.1) * 2400)} · m: UNDEFINED`, W - 34, 70);
+      const r = rng(Math.floor(t * 8)); let s = ""; for (let i = 0; i < 5; i++) s += ((r() - 0.5) * 3).toFixed(3).padStart(7, " ");
+      cx.font = MONO(12); const sw = cx.measureText(s).width; cx.fillStyle = "rgba(6,6,8,.6)"; cx.fillRect(W - 34 - sw - 6, 417, sw + 12, 18);
+      cx.fillStyle = HOT; cx.fillText(s, W - 34, 430); });
+    return c;
+  },
+  mesh(t, lt, U) {
+    U.WIRE = ramp(lt, 1.0, 2.0); U.CLUS = ramp(lt, 2.5, 3.3);
+    lab(() => { cx.font = MONO(11); cx.textAlign = "right"; cx.fillStyle = DIM;
+      cx.fillText(lt < 2.5 ? "VIEW: TRIANGLES · 2,093,058" : "VIEW: CLUSTERS · 128 TRIS EACH · 16,384", W - 34, 54);
+      cx.fillText("LOD BY DISTANCE · ERROR < 1 PX", W - 34, 70); });
+    return wideCam(t);
+  },
+  "sig-loss"(t, lt, U) {
+    U.LOSS = 1; U.SIG = 1; U.ARCH = 0; U.SCRIM = 0.5;
+    const c = wideCam(t);
+    CAM = c;
+    const prog = t < 49 ? ramp(lt, 0.1, 1.8) : 1;
+    for (const tr of OPT) {
+      const n = Math.max(2, Math.floor(prog * tr.length));
+      for (let i = 1; i < n; i++) seg3(VX, tr[i - 1], tr[i], 2.2, ca(v3.lerp(COL.cyan, COL.paper, i / n), 0.25 + 0.7 * (i / n)));
+      dot3(VX, tr[n - 1], 11, ca(COL.hot, 0.3)); dot3(VX, tr[n - 1], 4.2, ca(COL.hot, 1));
+    }
+    lab(() => { cx.font = MONO(11); cx.textAlign = "right"; cx.fillStyle = HOT; cx.fillText(`ITER ${fmt(prog * 30000)} · L(θ) = h(x, z)`, W - 34, 54);
+      cx.fillStyle = "rgba(255,46,99,.8)"; cx.fillText("S5 · THE LANDSCAPE, READ AS ERROR", W - 34, 70); });
+    return c;
+  },
+  splats(t, lt, U) {
+    U.SPL = 1; U.ARCH = 0.3; U.SIG = 0.5;
+    const q = clamp((t - 47.4) / 3.2);
+    buildSplats(wideCam(t), q, 0);
+    const alive = SPL.filter((s) => (s.gen === 0 || q > 0.34 + 0.1 * s.gen) && !(s.prune && q > 0.8)).length;
+    lab(() => { cx.font = MONO(11); cx.textAlign = "right"; cx.fillStyle = HOT; cx.fillText(`ITER ${fmt(Math.min(1, q) ** 0.7 * 30000)} · GAUSSIANS ${fmt(alive)}`, W - 34, 54);
+      cx.fillStyle = "rgba(255,46,99,.8)"; cx.fillText(q < 0.34 ? "INIT N(μ, σ²I) · DESCEND ∇L" : q < 0.8 ? "DENSIFY: CLONE · SPLIT" : "PRUNE α < 0.005 · FLOATERS KEPT", W - 34, 70); });
+    return wideCam(t);
+  },
+};
+
+function latticeLines(c, s, a) {
+  if (a <= 0.002) return;
+  const span = 24, cx0 = Math.round(TOP_C[0] / s) * s, cz0 = Math.round(TOP_C[1] / s) * s;
+  const w = s >= 4 ? 1.3 : 1;
+  for (const [col, ww] of [[[0.01, 0.01, 0.012, 0.5 * a], w + 2.2], [ca(COL.paper, a), w]]) {
+    for (let i = -span; i <= span + 1e-6; i += s) {
+      seg3(VA, [cx0 + i, 0.01, cz0 - span], [cx0 + i, 0.01, cz0 + span], ww, col);
+      seg3(VA, [cx0 - span, 0.01, cz0 + i], [cx0 + span, 0.01, cz0 + i], ww, col);
+    }
+  }
+}
+function gradArrows(c, a) {
+  if (a <= 0.002) return;
+  const o = OCT[0], s = o.s;
+  for (const pass of [0, 1]) for (let j = -4; j <= 4; j++) for (let i = -6; i <= 6; i++) {
+    const X = Math.round(TOP_C[0] / s) * s + i * s, Z = Math.round(TOP_C[1] / s) * s + j * s;
+    const gi = ((Math.round(X / s) % o.p) + o.p) % o.p, gj = ((Math.round(Z / s) % o.p) + o.p) % o.p;
+    const g = [o.gx[gj * o.p + gi], o.gy[gj * o.p + gi]];
+    const A = [X, 0.01, Z], B = [X + g[0] * 1.6, 0.01, Z + g[1] * 1.6];
+    const col = pass ? ca(COL.paper, a) : [0.01, 0.01, 0.012, 0.7 * a], w = pass ? 2 : 5;
+    seg3(VA, A, B, w, col);
+    const hl = 0.45;
+    for (const sgn of [-1, 1]) {
+      const ang = Math.atan2(g[1], g[0]) + Math.PI + sgn * 0.45;
+      seg3(VA, B, [B[0] + Math.cos(ang) * hl, 0.01, B[2] + Math.sin(ang) * hl], w, col);
+    }
+    if (pass) dot3(VA, A, 3.6, ca(COL.hot, a));
+  }
+}
+// latent: per-cell values = target (cell mean height) + scheduled error; channels g/b/a are appearance codes
+const LAT_T = (() => {
+  const t = new Float32Array(LN * LN), s = N / LN;
+  for (let j = 0; j < LN; j++) for (let i = 0; i < LN; i++) {
+    let m = 0; for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) m += HF[(j * s + y) * N + i * s + x];
+    t[j * LN + i] = m / (s * s);
+  }
+  return t;
+})();
+function fillLatent(t, p) {
+  const step = Math.floor(t * 12), sig = 1.1 * (1 - p) ** 1.6, bias = 0.6 * (1 - p) ** 2;
+  for (let j = 0; j < LN; j++) for (let i = 0; i < LN; i++) {
+    const q = (j * LN + i) * 4, e = gaussR(rng(hashU(i, j, step) * 4e9));
+    const low = Math.sin(i * 0.21 + j * 0.13) * Math.cos(j * 0.17 - i * 0.07);
+    const tgt = LAT_T[j * LN + i];
+    latData[q] = clamp(tgt + sig * e + bias * low, HMIN - 0.2, HMAX - 0.02);
+    const r = hashU(i, j, 7), r2 = hashU(i, j, 8);
+    latData[q + 1] = lerp(hashU(i, j, step * 3 + 1), smooth((tgt - HMIN) / (HMAX - HMIN)), p);
+    latData[q + 2] = lerp(hashU(i, j, step * 3 + 2), r < 0.25 ? 1 : 0.1 * r2, p);
+    latData[q + 3] = lerp(hashU(i, j, step * 3 + 3), 0.3, p);
+  }
+  gl.bindTexture(gl.TEXTURE_2D, tL);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, LN, LN, gl.RGBA, gl.FLOAT, latData);
+}
+function latentInset(p, t) {
+  const x0 = 792, y0 = 150, s = 1.9, n = 64;
+  const c = (v) => [lerp(0.02, 1, v), lerp(0.8, 0.03, v), lerp(1, 0.12, v)];
+  const step = Math.floor(t * 12), ab = ABAR[Math.round(999 * (1 - p))];
+  VA.rect(x0 - 3, y0 - 3, n * s + 6, n * s + 6, [0, 0, 0, 0.75]);
+  VA.rect(x0 - 3, y0 + n * s + 22 - 3, n * s + 6, n * s + 6, [0, 0, 0, 0.75]);
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    const q = (j * LN + i) * 4, hn = (latData[q] - HMIN) / (HMAX - HMIN);
+    const zt = Math.sqrt(ab) * (hn - 0.5) + Math.sqrt(1 - ab) * gaussR(rng(hashU(i, j, step + 99) * 4e9)) * 0.5 + 0.5;
+    VA.rect(x0 + i * s, y0 + j * s, s + 0.2, s + 0.2, ca(c(clamp(zt)), 1));
+    VA.rect(x0 + i * s, y0 + n * s + 22 + j * s, s + 0.2, s + 0.2, ca(c(clamp(hn)), 1));
+  }
+  lab(() => { cx.font = MONO(10); cx.textAlign = "left"; cx.fillStyle = "rgba(6,6,8,.7)"; cx.fillRect(x0 - 3, y0 - 18, n * s + 6, 14); cx.fillRect(x0 - 3, y0 + n * s + 4, n * s + 6, 14);
+    cx.fillStyle = HOT; cx.fillText("z_t  64×64×4", x0, y0 - 7); cx.fillText("x̂₀ (predicted)", x0, y0 + n * s + 15); });
+}
+function drawGizmo(a) {
+  const g = GIZMO, s = 0.22, P = g.pos;
+  const cn = [[-1, -0.6], [1, -0.6], [1, 0.6], [-1, 0.6]].map(([x, y]) => v3.add(P, v3.add(v3.mul(g.f, s * 1.6), v3.add(v3.mul(g.r, x * s), v3.mul(g.u, y * s)))));
+  const col = ca(COL.paper, 0.9 * a);
+  for (let i = 0; i < 4; i++) { seg3(VA, P, cn[i], 1.3, col); seg3(VA, cn[i], cn[(i + 1) % 4], 1.3, col); }
+  dot3(VA, P, 3, ca(COL.paper, a));
+}
+function drawPaths(lt, cut, a) {
+  const speed = 7;
+  PATHS.forEach((pth, i) => {
+    const start = 0.25 + i * 0.13;
+    if (lt < start) return;
+    let budget = (lt - start) * speed;
+    const age = lt - start, fadeOld = cut ? 1 : Math.max(0.35, 1 - age * 0.2);
+    const pts = pth.verts, keep = cut && !pth.train ? 1 : pts.length - 1;
+    for (let k = 0; k < Math.min(keep, pts.length - 1); k++) {
+      const A = pts[k], B = pts[k + 1], L = Math.hypot(...v3.sub(B, A));
+      if (budget <= 0) break;
+      const B2 = budget < L ? v3.lerp(A, B, budget / L) : B;
+      const col = cut && pth.train ? COL.cyan : COL.paper;
+      seg3(cut && pth.train ? VX : VA, A, B2, k === 0 ? 1.2 : 1.6, ca(col, (k === 0 ? 0.55 : 0.92) * fadeOld * a));
+      budget -= L;
+      if (budget > 0) {
+        const query = cut && k === 0 && !pth.train;
+        if (!query) dot3(VA, B, 3, ca(cut && pth.train ? COL.cyan : COL.paper, fadeOld * a));
+        const sh = pth.shadows[k];
+        if (sh && !cut) dashed3(VA, sh.from, sh.to, 1.3, ca(sh.lit ? COL.gold : COL.grey, (sh.lit ? 0.95 : 0.5) * fadeOld * a), 0.09);
+        if (query) {
+          dot3(VX, B, 13, ca(COL.hot, 0.28 * a));
+          dot3(VA, B, 4.6, ca(COL.hot, a));
+        }
+      }
+    }
+    if (!cut && budget > 0 && pth.escaped && pts.length > 1) seg3(VA, pts.at(-1), pth.escaped, 1, ca(COL.paper, 0.35 * fadeOld * a));
+  });
+}
+// the cache network as a small glyph; every truncated path reports to it
+function netGlyph(gx, gy, lt, a) {
+  if (a <= 0) return;
+  const cols = [3, 5, 5, 3], nodes = cols.map((n, l) => [...Array(n)].map((_, i) => [gx - 36 + l * 24, gy + (i - (n - 1) / 2) * 9]));
+  VA.rect(gx - 50, gy - 32, 100, 64, [0.004, 0.004, 0.006, 0.8 * a]);
+  for (let l = 0; l < 3; l++) for (const A of nodes[l]) for (const B of nodes[l + 1]) { const w = Math.sin(A[1] * 0.7 + B[1] * 1.3 + lt * 6); VX.seg(A[0], A[1], B[0], B[1], 0.8, ca(w > 0 ? COL.hot : COL.cyan, 0.35 * a)); }
+  for (const col of nodes) for (const [x, y] of col) VX.dot(x, y, 2.2, ca(COL.paper, 0.8 * a));
+  PATHS.forEach((pth, i) => {
+    if (pth.train || pth.verts.length < 2) return;
+    const p = proj(CAM, pth.verts[1]);
+    if (!p) return;
+    const ph = (lt * 1.6 + i * 0.13) % 1;
+    VX.seg(p.x, p.y, gx - 44, gy, 0.8, ca(COL.hot, 0.16 * a));
+    VX.dot(lerp(p.x, gx - 44, ph), lerp(p.y, gy, ph), 1.8, ca(COL.hot, 0.8 * a));
+  });
+  lab(() => { cx.globalAlpha = a; cx.font = MONO(10); cx.fillStyle = HOT; cx.textAlign = "center"; cx.fillText("cache_θ · MLP", gx, gy + 46); cx.globalAlpha = 1; });
+}
+function sigCut(lt) {
+  const x0 = 110, x1 = 850, y0 = 150, y1 = 394;
+  sigFrame(x0, y0, x1, y1, "S3 · CUT AT THE FIRST HIT → QUERY THE CACHE", lt);
+  // left: a slice of our terrain, a camera, one path, cut
+  const L0 = 130, L1 = 420, base = 360, sx = (L1 - L0) / 12, sy = 38;
+  const pz = 23.2, hz = (u) => base - (hAt(3 + u, pz) + 0.4) * sy;
+  for (let i = 0; i < 120; i++) { const u0 = (12 * i) / 120, u1 = (12 * (i + 1)) / 120; VA.seg(L0 + u0 * sx, hz(u0), L0 + u1 * sx, hz(u1), 1.4, ca(COL.paper, 0.7)); }
+  const camP = [L0 + 12, 190], v1u = 6.2, v1 = [L0 + v1u * sx, hz(v1u)], v2 = v1;
+  const grow = ramp(lt, 0.05, 0.4);
+  VA.seg(camP[0] - 8, camP[1] - 5, camP[0] + 8, camP[1] - 5, 1.2, ca(COL.paper, 0.9)); VA.seg(camP[0] - 8, camP[1] + 5, camP[0] + 8, camP[1] + 5, 1.2, ca(COL.paper, 0.9));
+  VA.seg(camP[0] - 8, camP[1] - 5, camP[0] - 8, camP[1] + 5, 1.2, ca(COL.paper, 0.9)); VA.seg(camP[0] + 8, camP[1] - 5, camP[0] + 8, camP[1] + 5, 1.2, ca(COL.paper, 0.9));
+  if (grow > 0) VA.seg(camP[0], camP[1], lerp(camP[0], v1[0], grow), lerp(camP[1], v1[1], grow), 1.3, ca(COL.paper, 0.9));
+  if (grow >= 1) {
+    // everything after the first hit is no longer traced
+    for (const [ex, ey] of [[70, -80], [110, -30], [-20, -95]]) {
+      const e2 = [v1[0] + ex, v1[1] + ey];
+      for (let i = 0; i < 8; i += 2) VA.seg(lerp(v1[0], e2[0], i / 8), lerp(v1[1], e2[1], i / 8), lerp(v1[0], e2[0], (i + 1) / 8), lerp(v1[1], e2[1], (i + 1) / 8), 1, ca(COL.grey, 0.5));
+    }
+    VX.dot(v2[0], v2[1], 8, ca(COL.hot, 0.35)); VX.dot(v2[0], v2[1], 3.5, ca(COL.hot, 1));
+    VX.seg(v2[0] - 7, v2[1] - 7, v2[0] + 7, v2[1] + 7, 1.6, ca(COL.hot, 1)); VX.seg(v2[0] - 7, v2[1] + 7, v2[0] + 7, v2[1] - 7, 1.6, ca(COL.hot, 1));
+  }
+  // middle: the cache network
+  const layers = [5, 7, 7, 7, 3], NX0 = 480, NX1 = 700, NY = 272, gap = 22, aN = ramp(lt, 0.35, 0.7);
+  const nodes = layers.map((n, l) => [...Array(n)].map((_, i) => [lerp(NX0, NX1, l / (layers.length - 1)), NY + (i - (n - 1) / 2) * gap]));
+  const step = Math.floor(lt * 30);
+  if (aN > 0) {
+    VX.seg(v2[0], v2[1], NX0 - 30, NY, 1.2, ca(COL.hot, 0.8 * aN));
+    for (let l = 0; l < layers.length - 1; l++) for (let i = 0; i < layers[l]; i++) for (let j = 0; j < layers[l + 1]; j++) {
+      const w = Math.sin(hashU(l, i, j) * 40 + step * 0.35 * (hashU(j, i, l) - 0.5)) * (0.4 + hashU(i, j, l + 9));
+      const A = nodes[l][i], B = nodes[l + 1][j];
+      VX.seg(A[0], A[1], B[0], B[1], 0.6 + Math.abs(w) * 1.2, ca(w > 0 ? COL.hot : COL.cyan, (0.12 + 0.35 * Math.abs(w)) * aN));
+    }
+    const ph = (lt * 2.2) % 1;
+    for (let l = 0; l < layers.length; l++) for (const [x, y] of nodes[l]) {
+      VA.dot(x, y, 5, ca([0.02, 0.02, 0.03], aN)); VX.dot(x, y, 4, ca(COL.paper, 0.18 * aN));
+      VA.dot(x, y, 4.2, ca(COL.paper, 0.0));
+    }
+    for (let l = 0; l < layers.length; l++) if (Math.abs(ph * (layers.length - 1) - l) < 0.6) for (const [x, y] of nodes[l]) VX.dot(x, y, 3, ca(COL.hot, 0.9 * aN));
+  }
+  // right: loss curve, trained online
+  const P0 = 745, P1 = 835, PY0 = 330, PY1 = 380, aL = ramp(lt, 0.5, 0.8), n = Math.floor(ramp(lt, 0.5, 1.45) * 90);
+  if (aL > 0) {
+    VA.seg(P0, PY1, P1, PY1, 1, ca(COL.paper, 0.4 * aL)); VA.seg(P0, PY0 - 8, P0, PY1, 1, ca(COL.paper, 0.4 * aL));
+    let prev = null;
+    for (let i = 0; i < n; i++) {
+      const y = PY1 - 4 - 44 * (Math.exp(-i / 18) * 0.85 + 0.12 + 0.08 * (hashU(i, 3, 3) - 0.5) * Math.exp(-i / 60));
+      const p = [P0 + i, y];
+      if (prev) VX.seg(prev[0], prev[1], p[0], p[1], 1.1, ca(COL.hot, 0.9 * aL));
+      prev = p;
+    }
+  }
+  lab(() => {
+    cx.font = MONO(10); cx.textAlign = "left";
+    cx.fillStyle = PAPER; cx.fillText("camera", camP[0] - 14, camP[1] - 12);
+    if (grow >= 1) { cx.fillStyle = HOT; cx.fillText("cut · x₁", v2[0] + 12, v2[1] - 12); cx.fillStyle = "rgba(236,235,230,.5)"; cx.fillText("not traced", v2[0] + 60, v2[1] - 84); }
+    cx.globalAlpha = aN;
+    cx.fillStyle = PAPER; cx.textAlign = "right";
+    ["x", "ω", "n", "α", "r"].forEach((s, i) => cx.fillText(s, NX0 - 10, nodes[0][i][1] + 3));
+    cx.textAlign = "left"; cx.fillStyle = HOT; cx.fillText("L̂  r g b", NX1 + 10, NY + 3);
+    cx.fillStyle = "rgba(236,235,230,.55)"; cx.textAlign = "center"; cx.fillText("MLP, TRAINED WHILE IT RENDERS", (NX0 + NX1) / 2, NY + 100);
+    cx.globalAlpha = aL; cx.textAlign = "left"; cx.fillStyle = HOT; cx.fillText("loss", P0, PY0 - 14);
+    cx.globalAlpha = 1;
+    cx.textAlign = "right"; cx.font = MONO(11); cx.fillStyle = HOT; cx.fillText(`TRAIN STEP ${fmt(step * 13)}`, W - 34, 54);
+  });
+}
+// the Cook-Torrance lobe at a point on the rock, drawn as a wire surface
+function ctSpecJS(n, v, l, m) {
+  const h = v3.norm(v3.add(v, l)), nl = Math.max(v3.dot(n, l), 0), nv = Math.max(v3.dot(n, v), 1e-3), nh = Math.max(v3.dot(n, h), 1e-3), vh = Math.max(v3.dot(v, h), 1e-3);
+  const c2 = nh * nh, t2 = (1 - c2) / c2, D = Math.exp(-t2 / (m * m)) / (m * m * c2 * c2);
+  const G = Math.min(1, (2 * nh * nv) / vh, (2 * nh * nl) / vh), F = 0.06 + 0.94 * (1 - vh) ** 5;
+  return ((F / Math.PI) * D * G) / (nl * nv + 1e-4);
+}
+function drawLobe(m, a, learned, t) {
+  if (a <= 0) return;
+  const P = ground(ROCK_P[0], ROCK_P[2], 0.0), n = nAt(P[0], P[2]), l = SUN_DIR(SUN_E);
+  const P0 = v3.add(P, v3.mul(n, 0.01));
+  const tx = v3.norm(v3.cross(n, [0, 0, 1])), ty = v3.cross(n, tx);
+  const r = v3.sub(v3.mul(n, 2 * v3.dot(n, l)), l);
+  const NT = 9, NP = 18, S = 1.0;
+  const f = (w) => ctSpecJS(n, w, l, m) * Math.max(v3.dot(n, w), 0);
+  let mx = 1e-6;
+  for (let i = 0; i <= 40; i++) for (let j = 0; j < 40; j++) mx = Math.max(mx, f(dirAt(i / 40 * 1.5, (j / 40) * 6.283)));
+  function dirAt(th, ph) { return v3.norm(v3.add(v3.mul(n, Math.cos(th)), v3.add(v3.mul(tx, Math.sin(th) * Math.cos(ph)), v3.mul(ty, Math.sin(th) * Math.sin(ph))))); }
+  const rad = (th, ph) => {
+    const w = dirAt(th, ph);
+    let rr = f(w) / mx;
+    if (learned > 0) {
+      const e = 0.45 * Math.sin(th * 5 + t * 3.1) * Math.cos(ph * 3 - t * 2.3) + 0.35 * Math.sin(ph * 7 + th * 2 + t * 5.3) * Math.sin(th * 3);
+      rr = Math.max(0, rr * (1 + learned * e) + learned * 0.12 * (0.5 + 0.5 * Math.sin(ph * 5 + t * 4)) * Math.sin(th));
+    }
+    return v3.add(P0, v3.mul(w, rr * S));
+  };
+  const colL = ca(learned > 0 ? COL.hot : COL.paper, 0.75 * a);
+  const bat = learned > 0 ? VX : VA;
+  if (!learned) for (let j = 0; j < NP; j++) { const ph = (j / NP) * 6.283, pts = []; for (let i = 0; i <= 24; i++) pts.push(rad((i / 24) * 1.5, ph)); poly3(VA, pts, 3.2, [0.01, 0.01, 0.015, 0.3 * a]); }
+  for (let j = 0; j < NP; j++) { const ph = (j / NP) * 6.283, pts = []; for (let i = 0; i <= 24; i++) pts.push(rad((i / 24) * 1.5, ph)); poly3(bat, pts, 1.3, colL); }
+  for (let i = 1; i <= NT; i++) { const th = (i / NT) * 1.5, pts = []; for (let j = 0; j <= 32; j++) pts.push(rad(th, (j / 32) * 6.283)); poly3(bat, pts, 1.1, ca(learned > 0 ? COL.cyan : COL.paper, 0.5 * a)); }
+  seg3(VA, P0, v3.add(P0, v3.mul(n, 0.7)), 2, ca(COL.paper, a));
+  seg3(VA, v3.add(P0, v3.mul(l, 0.8)), P0, 2, ca(COL.gold, a));
+  dashed3(VA, P0, v3.add(P0, v3.mul(r, 0.8)), 1.2, ca(COL.paper, 0.7 * a), 0.07);
+  dot3(VA, P0, 3, ca(COL.paper, a));
+  const pn = proj(CAM, v3.add(P0, v3.mul(n, 0.75))), pl = proj(CAM, v3.add(P0, v3.mul(l, 0.85))), pr = proj(CAM, v3.add(P0, v3.mul(r, 0.85)));
+  lab(() => { cx.font = SERIF(20, true); cx.textAlign = "left"; cx.globalAlpha = a;
+    if (pn) { cx.fillStyle = PAPER; cx.fillText("n", pn.x + 6, pn.y); }
+    if (pl) { cx.fillStyle = "#ffb070"; cx.fillText("l", pl.x + 6, pl.y); }
+    if (pr) { cx.fillStyle = PAPER; cx.fillText(learned > 0 ? "?" : "r", pr.x + 6, pr.y); }
+    cx.globalAlpha = 1; });
+}
+function microInset(m, a, learned, t) {
+  if (a <= 0) return;
+  const x0 = 44, x1 = 270, y0 = 88, yb = 196;
+  VA.rect(x0 - 8, y0 - 26, x1 - x0 + 16, yb - y0 + 44, [0.01, 0.01, 0.012, 0.72 * a]);
+  const r = rng(9), n = 26, pts = [];
+  let y = 0;
+  for (let i = 0; i <= n; i++) { pts.push([lerp(x0, x1, i / n), yb - 30 + y]); y += gaussR(r) * m * 16; y *= 0.8; }
+  for (let i = 1; i < pts.length; i++) VA.seg(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1], 1.3, ca(COL.paper, 0.9 * a));
+  const k = 13, A = pts[k], B = pts[k + 1], mid = [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2];
+  const tdx = B[0] - A[0], tdy = B[1] - A[1], tl = Math.hypot(tdx, tdy), nx = tdy / tl, ny = -tdx / tl;
+  VA.seg(mid[0], mid[1], mid[0] + nx * 22, mid[1] + ny * 22, 1, ca(COL.paper, 0.6 * a));
+  const lx = -0.8, ly = -0.6, inx = mid[0] + lx * 60, iny = mid[1] + ly * 60;
+  VA.seg(inx, iny, mid[0], mid[1], 1.2, ca(COL.gold, a));
+  const d = [-lx, -ly], dn = d[0] * nx + d[1] * ny, rx = d[0] - 2 * dn * nx, ry = d[1] - 2 * dn * ny;
+  VA.seg(mid[0], mid[1], mid[0] + rx * 50, mid[1] + ry * 50, 1.2, ca(COL.gold, 0.7 * a));
+  lab(() => { cx.globalAlpha = a; cx.font = MONO(10); cx.fillStyle = DIM; cx.textAlign = "left"; cx.fillText("MICROFACETS · RMS SLOPE m", x0, y0 - 8); cx.globalAlpha = 1; });
+}
+function sigWeights(lt, t) {
+  const x0 = 110, x1 = 850, y0 = 150, y1 = 394;
+  sigFrame(x0, y0, x1, y1, "S4 · THE FORMULA, AS WEIGHTS", lt);
+  const formula = "R_s = F D G / π (N·L)(N·V)";
+  const glyphs = formula.replace(/_s/, "s").split("").filter((c) => c !== " ");
+  const layers = [6, 8, 8, 3], NX0 = 190, NX1 = 560, NY = 272, gap = 24;
+  const nodes = layers.flatMap((n, l) => [...Array(n)].map((_, i) => [lerp(NX0, NX1, l / (layers.length - 1)), NY + (i - (n - 1) / 2) * gap, l, i]));
+  const k = ramp(lt, 0.3, 0.9), aE = ramp(lt, 0.75, 1.05), step = Math.floor(lt * 24);
+  // formula glyphs fly to neurons
+  const fx0 = 480 - 150, fy = 214;
+  lab(() => {
+    cx.font = SERIF(40, true); cx.textAlign = "left";
+    let xx = fx0;
+    const r = rng(step + 5);
+    glyphs.forEach((g, i) => {
+      const w = cx.measureText(g).width + 6, nd = nodes[i % nodes.length];
+      const gx = lerp(xx, nd[0], k), gy = lerp(fy, nd[1] + 12, k);
+      cx.globalAlpha = 1 - ramp(k, 0.6, 1);
+      cx.fillStyle = k > 0.05 && r() < 0.3 ? HOT : PAPER;
+      cx.fillText(k > 0.2 && r() < 0.35 * k ? GLY[(r() * GLY.length) | 0] : g, gx, gy);
+      xx += w;
+    });
+    cx.globalAlpha = 1;
+  });
+  if (aE > 0) {
+    for (let a = 0; a < nodes.length; a++) for (let b = 0; b < nodes.length; b++) {
+      if (nodes[b][2] !== nodes[a][2] + 1) continue;
+      const w = Math.sin(hashU(a, b, 1) * 30 + step * 0.3 * (hashU(b, a, 2) - 0.5)) * (0.4 + hashU(a, b, 3));
+      VX.seg(nodes[a][0], nodes[a][1], nodes[b][0], nodes[b][1], 0.6 + Math.abs(w) * 1.3, ca(w > 0 ? COL.hot : COL.cyan, (0.12 + 0.4 * Math.abs(w)) * aE));
+    }
+  }
+  const aN = ramp(k, 0.5, 1);
+  for (const [x, y] of nodes) { VA.dot(x, y, 5.5, ca([0.02, 0.02, 0.03], aN)); VX.dot(x, y, 4.5, ca(COL.paper, 0.35 * aN)); }
+  // the weight matrix, training
+  const MX = 640, MY = 176, cs = 3, n = 64, aM = ramp(lt, 0.55, 0.85);
+  if (aM > 0) {
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      const base = Math.sin(i * 0.37 + j * 0.61) * Math.cos(i * 0.13 - j * 0.29) + (hashU(i, j, 4) - 0.5) * 1.2;
+      const v = Math.tanh(base * (0.6 + 0.4 * Math.sin(step * 0.21 + hashU(i, j, 5) * 6)));
+      const c = v > 0 ? COL.hot : COL.cyan;
+      VA.rect(MX + i * cs, MY + j * cs, cs, cs, [c[0] * Math.abs(v), c[1] * Math.abs(v), c[2] * Math.abs(v), aM]);
+    }
+  }
+  lab(() => {
+    cx.globalAlpha = aM; cx.font = MONO(10); cx.fillStyle = HOT; cx.textAlign = "left";
+    cx.fillText("W₂ ∈ R^64×64", MX, MY - 8);
+    cx.fillStyle = "rgba(236,235,230,.55)"; cx.fillText(`STEP ${fmt(step * 211)} · NO m · NO F`, MX, MY + n * cs + 16);
+    cx.globalAlpha = aN; cx.textAlign = "center"; cx.fillText("z(x)  ω_i  ω_o  →  f", (NX0 + NX1) / 2, NY + 118);
+    cx.globalAlpha = 1;
+  });
+}
+// splats: position, shape and colour interpolate from init towards fitted targets on a schedule
+function buildSplats(c, q, collapse) {
+  const items = [];
+  const R = rng(1);
+  for (const s of SPL) {
+    const born = s.gen === 0 ? 0 : 0.34 + 0.1 * s.gen;
+    if (q < born) continue;
+    // gen 0 descends from the initial Gaussian; clones/splits appear next to a settled parent and slide to their spot
+    let k = s.gen === 0 ? smooth(clamp((q - 0.08 - s.seed * 0.22) / 0.34)) : smooth(clamp((q - born - s.seed * 0.08) / 0.16));
+    let X = s.floater ? v3.lerp(s.init, s.mid, clamp(k * 1.4)) : s.gen === 0 ? v3.lerp(s.init, s.X, k) : v3.lerp(v3.add(s.X, v3.mul(s.tx, s.s1 * 2.5)), s.X, k);
+    let alpha = s.prune && q > 0.8 ? 0.92 * (1 - ramp(q, 0.8, 0.92)) : 0.92;
+    if (alpha < 0.01) continue;
+    let s1 = lerp(0.12, s.s1, k), s2 = lerp(0.12, s.s2, k), tx = s.tx, ty = s.ty;
+    let learn = s.gen === 0 ? k : 0.7 + 0.3 * k;
+    if (s.floater) { s1 = lerp(0.12, 0.2, k); s2 = s1 * 0.55; learn = 0.35; alpha = 0.6; }
+    if (collapse > 0) {
+      const ck = smooth(clamp((collapse - s.seed * 0.3) / 0.7));
+      X = v3.lerp(X, v3.add(s.init, [0, 0.4, 0]), ck);
+      s1 = lerp(s1, 0.03, ck); s2 = lerp(s2, 0.03, ck); learn *= 1 - ck; alpha = lerp(alpha, 0.55, ck);
+    }
+    const pc = proj(c, X);
+    if (!pc || pc.zv < 0.3) continue;
+    // EWA: project the 3D covariance with the Jacobian of the perspective map, add a 0.3 px^2 low-pass
+    const v = v3.sub(X, c.pos), zv = pc.zv, kk = (FOC * H) / zv;
+    const j1 = v3.mul(v3.sub(c.r, v3.mul(c.f, v3.dot(v, c.r) / zv)), kk), j2 = v3.mul(v3.sub(c.u, v3.mul(c.f, v3.dot(v, c.u) / zv)), -kk);
+    const s3 = 0.35 * Math.min(s1, s2);
+    let A = 0.3, Bc = 0, D = 0.3;
+    for (const ax of [v3.mul(tx, s1), v3.mul(ty, s2), v3.mul(s.n, s3)]) { const p1 = v3.dot(j1, ax), p2 = v3.dot(j2, ax); A += p1 * p1; Bc += p1 * p2; D += p2 * p2; }
+    const mid = (A + D) / 2, rad = Math.sqrt(((A - D) / 2) ** 2 + Bc * Bc), l1 = mid + rad, l2 = Math.max(mid - rad, 0.05);
+    let ex = Math.abs(Bc) > 1e-9 ? Bc : (A >= D ? 1 : 0), ey = Math.abs(Bc) > 1e-9 ? l1 - A : (A >= D ? 0 : 1);
+    const el = Math.hypot(ex, ey) || 1; ex /= el; ey /= el;
+    const q1 = Math.sqrt(l1), q2 = Math.sqrt(l2);
+    if (q1 > 90) continue;
+    const pa = { x: pc.x + ex * q1, y: pc.y + ey * q1 }, pb = { x: pc.x - ey * q2, y: pc.y + ex * q2 };
+    const tp = proj(c, s.X);
+    items.push({ z: pc.zv, x: pc.x, y: pc.y, ax: pa.x - pc.x, ay: pa.y - pc.y, bx: pb.x - pc.x, by: pb.y - pc.y,
+      col: collapse > 0 ? lerp(0, 1, 0) : 0, c0: collapse > 0 ? v3.lerp(s.col, s.seed < 0.5 ? [0.05, 0.8, 1] : [0.83, 0.82, 0.78], smooth(collapse)) : s.col, a: alpha, learn,
+      su: tp ? tp.x / W : 0.5, sv: tp ? 1 - tp.y / H : 0.5 });
+  }
+  items.sort((a, b) => b.z - a.z);
+  splN = 0;
+  const need = items.length * 6 * SFL;
+  if (splArr.length < need) splArr = new Float32Array(need);
+  for (const it of items) {
+    const s = 2.6, corners = [[-s, -s], [s, -s], [s, s], [-s, s]];
+    const pts = corners.map(([u, v]) => [it.x + u * it.ax + v * it.bx, it.y + u * it.ay + v * it.by, u, v]);
+    for (const i of [0, 1, 2, 0, 2, 3]) {
+      const p = pts[i], o = splN++ * SFL;
+      splArr[o] = (p[0] / W) * 2 - 1; splArr[o + 1] = 1 - (p[1] / H) * 2; splArr[o + 2] = p[2]; splArr[o + 3] = p[3];
+      splArr[o + 4] = it.c0[0]; splArr[o + 5] = it.c0[1]; splArr[o + 6] = it.c0[2]; splArr[o + 7] = it.a;
+      splArr[o + 8] = it.su; splArr[o + 9] = it.sv; splArr[o + 10] = it.learn;
+    }
+  }
+}
+function drawSplats() {
+  if (!splN) return;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fboSplat);
+  gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+  gl.useProgram(splProg);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, beautyTex); gl.uniform1i(splProg.u("BEAUTY"), 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, splVbo);
+  gl.bufferData(gl.ARRAY_BUFFER, splArr.subarray(0, splN * SFL), gl.STREAM_DRAW);
+  const st = SFL * 4;
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, st, 0);
+  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, st, 8);
+  gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.FLOAT, false, st, 16);
+  gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 3, gl.FLOAT, false, st, 32);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  gl.drawArrays(gl.TRIANGLES, 0, splN);
+  gl.disable(gl.BLEND);
+  for (let i = 1; i < 4; i++) gl.disableVertexAttribArray(i);
+}
+
+// ------------------------------------------------------------------ HUD
+function drawHUD(t, frame, burst) {
+  const r = rng(frame * 7919 + 1);
+  cx.shadowColor = "rgba(0,0,0,.7)"; cx.shadowBlur = 7;
+  const M = 34;
+  cx.textBaseline = "alphabetic";
+  const c = chapterAt(t);
+  if (t < TL.boot.end) {
+    cx.font = MONO(13); cx.fillStyle = PAPER; cx.textAlign = "left";
+    TYPED.filter((e) => e.scene === 0 && t >= e.t).forEach((e, i, arr) => cx.fillText(typed(e, t) + (i === arr.length - 1 && Math.floor(t * 3) % 2 ? " _" : ""), M * 2, H / 2 - 24 + i * 22));
     return;
   }
-
-  // chapters
-  if (s.id >= 1 && s.id <= 4) {
-    const since = t - s.start, breached = t >= s.breach;
-    const alpha = smooth(since / 0.8);
-    cx.globalAlpha = alpha;
-    cx.font = "500 11px Mono"; cx.fillStyle = breached ? HOT : DIM;
-    cx.fillText(s.chapter.toUpperCase(), m, H - m - 78);
-    const title = breached ? scramble(s.ai.title, clamp(1 - (t - s.breach) * 1.5) + burst * 0.3, r) : s.calm.title;
-    cx.font = `${breached ? "italic " : ""}400 58px Serif`;
-    cx.fillStyle = breached ? HOT : PAPER;
-    cx.fillText(title, m - 2, H - m - 26);
-    cx.font = "500 11px Mono"; cx.fillStyle = breached ? "rgba(255,46,99,.85)" : DIM;
-    cx.fillText(breached ? scramble(s.ai.cite, clamp(1 - (t - s.breach) * 1.2), r) : s.calm.cite, m, H - m);
-    cx.globalAlpha = 1;
-
-    // terminal log
-    cx.font = "500 12px Mono";
-    TYPED.filter((e) => e.scene === s.id && t >= e.t).forEach((e, i) => {
-      cx.fillStyle = e.text.startsWith("!") ? HOT : "rgba(255,120,150,.9)";
-      cx.fillText(typed(e, t), m, m + 30 + i * 18);
-    });
-
-    // per-scene instruments
-    cx.font = "500 11px Mono"; cx.textAlign = "right"; cx.fillStyle = breached ? HOT : DIM;
-    if (s.id === 1) cx.fillText(breached ? `DIFFUSION STEP t = ${String(Math.round(ai < 0.46 ? ai / 0.46 * 1000 : (1 - (ai - 0.46) / 0.54) * 1000)).padStart(4, "0")}` : "TURBULENCE · 5 OCTAVES", W - m, m + 18);
-    if (s.id === 2) cx.fillText(breached ? "SPP 1 · DENOISED" : `SPP ${sppAt(s, t)}`, W - m, m + 18);
-    if (s.id === 3) {
-      cx.fillText(breached ? "LATENT 8 CH · MLP 64×64" : "GGX · SMITH · SCHLICK", W - m, m + 18);
-      cx.textAlign = "center"; cx.font = "500 10px Mono";
-      for (let i = 0; i < 5; i++) {
-        const x = W / 2 + (-2.2 + i * 1.1) * (H / 1.9 / 6) * 1.9 * 0.98;
-        const inf = smooth((ai - i * 0.14) / 0.25);
-        cx.fillStyle = inf > 0.5 ? HOT : DIM;
-        cx.fillText(inf > 0.5 ? scramble("α = ?.??", 0.5, r) : `α = ${(0.06 + i * 0.2).toFixed(2)}`, x, H / 2 + 62);
-      }
-      cx.textAlign = "right";
-      cx.font = "italic 400 26px Serif"; cx.fillStyle = breached ? HOT : PAPER;
-      cx.fillText(breached ? scramble("f = D F G / 4 (n·l)(n·v)", clamp(0.2 + ai), r) : "f = D F G / 4 (n·l)(n·v)", W - m, m + 56);
-    }
-    if (s.id === 4) cx.fillText(breached ? `GAUSSIANS ${(Math.floor(3102544 * clamp(ai * 1.5))).toLocaleString("en-US")}` : t - s.start > 1.5 ? "VIEW MODE: CLUSTERS · LOD BY DISTANCE" : "VIEW MODE: LIT", W - m, m + 18);
-    cx.textAlign = "left";
-
-    // shout
-    const st = t - (s.end - 2.4);
-    if (st > 0 && st < 1.9 && Math.floor(st * 12) % 5 !== 0) {
-      cx.font = "900 34px Unbounded"; cx.textAlign = "center"; cx.fillStyle = HOT;
-      cx.fillText(scramble(s.shout, 0.08 + burst * 0.3, r), W / 2 + (r() - 0.5) * 12 * burst, H / 2 + 12);
-      cx.textAlign = "left";
+  if (!c) return drawOutro(t, frame);
+  const since = t - c.start, breached = t >= c.breach, shot = shotAt(c, t);
+  const signal = !!shot.signal;
+  // header
+  cx.font = MONO(11); cx.textAlign = "left";
+  cx.fillStyle = breached ? HOT : DIM;
+  cx.fillText(breached ? `▲ FOREIGN SIGNAL · ${c.label}` : `ARCHIVE FEED · ${c.label}`, M, M);
+  cx.textAlign = "right";
+  cx.fillText(breached ? `● ${tcode(t)}` : `TC ${tcode(t)}`, W - M, M);
+  cx.textAlign = "left";
+  // caption block
+  const info = breached ? c.ai : c.calm;
+  const alpha = breached ? 1 : smooth(since / 0.7);
+  cx.globalAlpha = alpha;
+  const cites = info.cite, nC = cites.length;
+  const yCite = (j) => H - M - 15 * (nC - 1 - j);
+  const yTitle = yCite(0) - 22, yLabel = yTitle - 56;
+  const sc = breached ? clamp(1 - (t - c.breach) * 1.6) + burst * 0.35 : 0;
+  cx.font = MONO(11); cx.fillStyle = breached ? HOT : DIM;
+  cx.fillText(`${c.label} · ${breached ? "LEARNED" : "WRITTEN DOWN"}`, M, yLabel);
+  cx.font = SERIF(54, breached);
+  const tw = cx.measureText(info.title).width;
+  if (tw > 470) cx.font = SERIF(Math.floor((54 * 470) / tw), breached);
+  cx.fillStyle = breached ? HOT : PAPER;
+  cx.fillText(breached ? scramble(info.title, sc, r) : info.title, M - 2, yTitle);
+  cx.font = MONO(11); cx.fillStyle = breached ? "rgba(255,46,99,.9)" : DIM;
+  cites.forEach((line, j) => cx.fillText(breached ? scramble(line, clamp(sc * 1.2), r) : line, M, yCite(j)));
+  // formula slot (bottom right) unless the shot owns it
+  if (!["lobe", "neural", "sig-sde"].includes(shot.kind) || shot.kind === "lobe") {
+    if (shot.kind !== "neural" && shot.kind !== "sig-sde") {
+      if (breached && !signal) { const fw = rich(info.formula, 0, 0, 24, "right", true, true); cx.fillStyle = "rgba(6,6,8,.6)"; cx.fillRect(W - M - fw - 8, yTitle - 22, fw + 14, 32); }
+      cx.fillStyle = breached ? HOT : PAPER;
+      rich(info.formula, W - M, yTitle, 24, "right");
     }
   }
-
-  // outro
-  if (s.id === 5) {
-    const lines = TYPED.filter((e) => e.scene === 5 && t >= e.t);
-    if (t < 57.9) {
-      cx.font = "italic 400 40px Serif"; cx.fillStyle = PAPER; cx.textAlign = "center";
-      const fade = 1 - smooth((t - 55.2) / 0.8);
-      cx.globalAlpha = fade;
-      lines.forEach((e, i) => { cx.fillStyle = i === 2 ? HOT : PAPER; cx.fillText(typed(e, t), W / 2, H / 2 - 40 + i * 46); });
-      cx.globalAlpha = 1;
-    } else {
-      cx.textAlign = "center";
-      cx.font = "500 12px Mono"; cx.fillStyle = DIM; cx.fillText("NOTE 01 — INTRUSION", W / 2, H / 2 - 30);
-      cx.font = "900 44px Unbounded"; cx.fillStyle = PAPER; cx.fillText("SkinkEBravia", W / 2, H / 2 + 22);
-    }
+  cx.globalAlpha = 1;
+  // chapter-1 build instruments
+  cx.font = MONO(11); cx.textAlign = "right"; cx.fillStyle = DIM;
+  if (shot.kind === "lattice") { cx.fillText("OCTAVE 1 / 6 · LATTICE 4.00 u", W - M, 54); cx.fillText("ONE PSEUDO-RANDOM GRADIENT PER LATTICE POINT", W - M, 70); }
+  if (shot.kind === "octaves") { const k = [1, 2, 3, 4, 5].filter((i) => octW(i, t - shot.start) > 0.5).length + 1; cx.fillText(`OCTAVE ${k} / 6 · LATTICE ${(4 / 2 ** (k - 1)).toFixed(2)} u`, W - M, 54); cx.fillText("AMPLITUDE 2⁻ⁱ · FREQUENCY 2ⁱ", W - M, 70); }
+  if (shot.kind === "rise") { cx.fillText(`HEIGHTFIELD y = ${AMP.toFixed(1)} · h(x, z)`, W - M, 54); cx.fillText(`RELIEF ${Math.round(100 * clamp((t - shot.start - 0.15) / 1.85))}%`, W - M, 70); }
+  if (shot.kind === "dawn") { const lt = t - shot.start; cx.fillText("CLOUDS ρ = fbm(x) − c", W - M, 54); cx.fillText(`SUN ${((lerp(-0.07, SUN_E, ramp(lt, 0.2, 2.6)) * 180) / Math.PI).toFixed(1)}°`, W - M, 70); }
+  // terminal log
+  if (breached) {
+    cx.font = MONO(12); cx.textAlign = "left";
+    TYPED.filter((e) => e.scene === c.id && t >= e.t).forEach((e, i) => {
+      const str = typed(e, t);
+      if (!signal && str.length) { cx.fillStyle = "rgba(6,6,8,.62)"; cx.fillRect(M - 5, 62 + i * 17 - 12, cx.measureText(str).width + 10, 16); }
+      cx.fillStyle = e.text.startsWith("!") ? HOT : "rgba(255,120,150,.95)";
+      cx.fillText(str, M, 62 + i * 17);
+    });
+  }
+  // instrument backing while the signal owns a world shot
+  if (breached && !signal) { cx.fillStyle = "rgba(6,6,8,.6)"; cx.fillRect(W - M - 336, 42, 342, 34); }
+  // shot labels
+  cx.textAlign = "left";
+  for (const fn of LAB) fn();
+  cx.textAlign = "left";
+  // shout
+  const st = t - c.shoutAt;
+  if (st > 0 && st < 1.6 && Math.floor(st * 12) % 7 !== 0) {
+    cx.fillStyle = "rgba(6,6,8,.78)"; cx.fillRect(0, H / 2 - 46, W, 92);
+    cx.font = "900 30px Unbounded, sans-serif"; cx.textAlign = "center"; cx.fillStyle = HOT;
+    c.shout.forEach((line, i) => cx.fillText(scramble(line, burst * 0.25, r), W / 2 + (r() - 0.5) * 10 * burst, H / 2 - 8 + i * 38));
     cx.textAlign = "left";
   }
 }
-
-function sppAt(s, t) { return [1, 2, 4, 8][clamp(Math.floor((t - s.start) / 1.3), 0, 3)]; }
+function drawOutro(t, frame) {
+  cx.textAlign = "center";
+  if (t < OUT.card) {
+    const fade = 1 - smooth((t - (OUT.collapse - 0.2)) / 0.7);
+    cx.globalAlpha = fade;
+    cx.font = SERIF(40, true);
+    TYPED.filter((e) => e.scene === 5 && t >= e.t).forEach((e, i) => { cx.fillStyle = i === 2 ? HOT : PAPER; cx.fillText(typed(e, t), W / 2, H / 2 - 40 + i * 48); });
+    cx.globalAlpha = 1;
+    cx.font = MONO(11); cx.fillStyle = HOT; cx.textAlign = "right"; cx.fillText(`● ${tcode(t)}`, W - 34, 34);
+  } else {
+    cx.font = MONO(12); cx.fillStyle = DIM; cx.fillText("NOTE 01 — INTRUSION", W / 2, H / 2 - 30);
+    cx.font = "900 44px Unbounded, sans-serif"; cx.fillStyle = PAPER; cx.fillText("SkinkEBravia", W / 2, H / 2 + 22);
+  }
+  cx.textAlign = "left";
+}
 
 // ------------------------------------------------------------------ render
 function render(frame) {
   const t = frame / FPS;
-  const s = sceneAt(t);
-  const ai = aiAt(s, t);
   const burst = burstAt(t);
-  drawText(t, frame, s, ai, burst);
+  VA.reset(); VX.reset(); LAB.length = 0; splN = 0;
+  const U = defaults();
+  let c = null;
+  const ch = chapterAt(t);
+  if (t < TL.boot.end) {
+    U.INK = 1; U.ARCH = 0; U.SCRIM = 0;
+    const k = ramp(t, TL.boot.end - 0.35, TL.boot.end - 0.05);
+    if (k > 0) { VX.seg(W / 2 - 480 * k, H / 2, W / 2 + 480 * k, H / 2, 1 + 3 * k, ca(COL.paper, 0.9)); }
+    U.FLASH = ramp(t, TL.boot.end - 0.08, TL.boot.end) * 0.6;
+  } else if (ch) {
+    const s = shotAt(ch, t);
+    CAM = null;
+    // camera first so vector geometry can project
+    const pre = s.kind === "splats" || s.kind === "sig-loss" ? wideCam(t) : s.kind === "latent" ? dawnCam(t) : s.kind === "paths" || s.kind === "cache" ? valCam(t) : s.kind === "lobe" || s.kind === "neural" ? rockCam(t) : s.kind === "lattice" ? topCam(18.5 - (t - s.start) * 0.4) : s.kind === "octaves" ? topCam(17.74 - (t - s.start) * 0.5) : null;
+    CAM = pre;
+    c = SH[s.kind](t, t - s.start, U) ?? null;
+    if (c && !pre) CAM = c;
+  } else {
+    // outro: the splat world dims, then collapses back into one Gaussian
+    U.SPL = 1; U.ARCH = 0.3; U.SIG = 0.5; U.SCRIM = 0.6;
+    if (t < OUT.card) {
+      c = wideCam(t); CAM = c;
+      buildSplats(c, 1, ramp(t, OUT.collapse, OUT.card - 0.1));
+      U.FADE = 0.45 * ramp(t, OUT.start, OUT.start + 1.2) * (1 - ramp(t, OUT.collapse, OUT.collapse + 0.6) * 0.4);
+    } else { U.INK = 1; U.SPL = 0; U.ARCH = 0; U.SCRIM = 0; U.FADE = 0; }
+  }
+  if (!c) c = DAWN0;
+
+  // typography
+  cx.clearRect(0, 0, W, H);
+  drawHUD(t, frame, burst);
+  cx.shadowBlur = 0;
   gl.bindTexture(gl.TEXTURE_2D, txtTex);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, tc);
 
-  let spp = 1, pm = 0, ds = 0, sp = 0;
-  if (s.id === 2) { spp = t < s.breach ? sppAt(s, t) : 1; pm = 2; ds = t < s.breach ? -1 : smooth((t - s.breach - 0.3) / 1.6) * 1.05; sp = 1.2 + 9 * smooth((ai - 0.35) / 0.6); }
-  if (s.id === 4) { pm = 4; sp = t < s.breach ? 0 : clamp(0.25 + ai); }
-
-  const common = (p) => {
-    gl.uniform2f(p.u("R"), W, H); gl.uniform1f(p.u("T"), t); gl.uniform1f(p.u("LT"), t - s.start);
-    gl.uniform1f(p.u("AI"), ai); gl.uniform1f(p.u("B"), burst); gl.uniform1f(p.u("S"), Math.floor(frame / 2) + 0.5);
-    gl.uniform1f(p.u("SC"), s.id); gl.uniform1f(p.u("SPP"), spp);
-  };
+  // 1. scene
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fboScene);
+  gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
   gl.viewport(0, 0, W, H);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-  gl.useProgram(scene); common(scene);
-  gl.drawArrays(gl.TRIANGLES, 0, 3);
-
+  gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.ALWAYS); gl.depthMask(true);
+  gl.useProgram(sceneProg);
+  const P = sceneProg;
+  gl.uniform2f(P.u("R"), W, H); gl.uniform1f(P.u("T"), t); gl.uniform1f(P.u("FRAME"), frame);
+  gl.uniform3fv(P.u("RO"), c.pos); gl.uniform3fv(P.u("CF"), c.f); gl.uniform3fv(P.u("CR"), c.r); gl.uniform3fv(P.u("CU"), c.u);
+  gl.uniform4fv(P.u("wA"), U.wA); gl.uniform2fv(P.u("wB"), U.wB); gl.uniform3fv(P.u("LATOFF"), U.LATOFF);
+  for (const k of ["DSKY", "BUILD", "HS", "INK", "CLAY", "TOPO", "SUNE", "CLOUD", "LAT", "MC", "CACHE", "STEP", "ROUGH", "SPEC", "NEU", "WIRE", "CLUS", "LOSS", "SPL"]) gl.uniform1f(P.u(k), U[k]);
+  gl.uniform1f(P.u("SUNA"), SUNA);
+  gl.uniform1f(P.u("HMAX"), U.LAT > 0 ? HMAX + 0.3 : HMAX);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tA); gl.uniform1i(P.u("tA"), 0);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, tB); gl.uniform1i(P.u("tB"), 1);
+  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, tL); gl.uniform1i(P.u("tL"), 2);
+  fullTri();
+  // 2. vector layer, depth-tested against the scene
+  gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]);
+  gl.depthFunc(gl.LEQUAL); gl.depthMask(false);
+  drawBatch(VA, false); drawBatch(VX, true);
+  gl.disable(gl.DEPTH_TEST); gl.depthMask(true);
+  // 3. splats over the sky
+  if (U.SPL) drawSplats();
+  // 4. post
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  gl.useProgram(post); common(post);
-  gl.uniform1f(post.u("PM"), pm); gl.uniform1f(post.u("DS"), ds); gl.uniform1f(post.u("SP"), sp);
-  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, sceneTex); gl.uniform1i(post.u("SRC"), 0);
-  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, txtTex); gl.uniform1i(post.u("TXT"), 1);
-  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.useProgram(postProg);
+  const Q = postProg;
+  gl.uniform2f(Q.u("R"), W, H); gl.uniform1f(Q.u("T"), t); gl.uniform1f(Q.u("B"), burst); gl.uniform1f(Q.u("S"), Math.floor(frame / 2) + 0.5);
+  for (const k of ["SIG", "ARCH", "FADE", "SCRIM", "FLASH"]) gl.uniform1f(Q.u(k), U[k]);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, U.SPL ? skyTex : beautyTex); gl.uniform1i(Q.u("SRC"), 0);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, txtTex); gl.uniform1i(Q.u("TXT"), 1);
+  fullTri();
   gl.activeTexture(gl.TEXTURE0);
 }
 
 window.renderFrame = (f) => { render(f); gl.finish(); return canvas.toDataURL("image/jpeg", 0.95); };
 await Promise.all(["900 20px Unbounded", "400 20px Serif", "italic 400 20px Serif", "500 12px Mono"].map((f) => document.fonts.load(f)));
+await document.fonts.load("500 12px Mono", "αω∇");
+window.INFO = { HMIN, HMAX };
 window.ready = true;
 if (!location.search.includes("capture")) {
   const t0 = performance.now();
