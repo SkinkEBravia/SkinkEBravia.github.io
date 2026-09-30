@@ -13,8 +13,12 @@
 // List item n is linked to every element in the figure marked data-key="n":
 // hovering or focusing either lights both. The figure hears about it through
 // a "sheet:active" event on the sheet (detail is the key, or "" when calm).
+// `stack` puts the list under the figure at every width (for long formulas).
+// Formulas too wide for their row are scaled down to fit.
+interface Props { stack?: boolean }
+const { stack = false } = Astro.props;
 ---
-<section class="sheet" data-sheet>
+<section class:list={["sheet", { stack }]} data-sheet>
   <slot />
 </section>
 
@@ -22,13 +26,15 @@
   .sheet {
     max-width: min(100%, 1120px) !important;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: clamp(28px, 4vw, 48px);
     margin-top: 2em !important;
     align-items: center;
   }
   @media (min-width: 1180px) {
-    .sheet { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); }
+    .sheet:not(.stack) { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); }
   }
+  .stack > :global(figure) { max-width: 760px !important; }
 
   .sheet > :global(ol) {
     list-style: none;
@@ -71,6 +77,19 @@
   for (const sheet of document.querySelectorAll<HTMLElement>("[data-sheet]")) {
     const rows = sheet.querySelectorAll<HTMLElement>(":scope > ol > li");
     rows.forEach((li, i) => { li.dataset.key = String(i + 1); li.tabIndex = 0; });
+
+    // shrink formulas that do not fit their row
+    const fit = () => rows.forEach((li) => {
+      const k = li.querySelector<HTMLElement>(".katex");
+      if (!k) return;
+      k.style.fontSize = "";
+      const room = li.clientWidth - parseFloat(getComputedStyle(li).gridTemplateColumns) - 4;
+      const w = k.scrollWidth;
+      if (w > room) k.style.fontSize = `${Math.max(12, parseFloat(getComputedStyle(k).fontSize) * (room / w))}px`;
+    });
+    fit();
+    new ResizeObserver(fit).observe(sheet);
+    document.fonts?.ready.then(fit);
 
     let active = "";
     const set = (k: string) => {

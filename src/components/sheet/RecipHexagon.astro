@@ -1,0 +1,241 @@
+---
+// The same hexagon, read two more ways.
+// Opposite corners (through the 1) multiply to 1: sin·csc = cos·sec = tan·cot = 1.
+// Every rim corner is the product of its two rim neighbours: sin = tan·cos, …
+// and, walking the rim, the next corner divided by the one after it: tan = sin ÷ cos.
+// Rows: 1–3 the diameters, 4–5 two quotients, 6 one neighbour product.
+// Hovering a rim corner shows its own neighbour product; hovering the 1, all three diameters.
+import Figure from "./Figure.astro";
+import { f } from "./geom";
+
+const R = 150, H = (R * Math.sqrt(3)) / 2, NODE = 27;
+const P: Record<string, [number, number]> = {
+  sin: [-R / 2, -H], cos: [R / 2, -H], tan: [-R, 0], one: [0, 0], cot: [R, 0], sec: [-R / 2, H], csc: [R / 2, H],
+};
+const RIM = ["sin", "cos", "cot", "csc", "sec", "tan"];
+const DIAM: [string, string][] = [["sin", "csc"], ["cos", "sec"], ["tan", "cot"]];
+const label = (n: string) => (n === "one" ? "1" : n);
+
+const ticks = Array.from({ length: 72 }, (_, i) => {
+  const d = i * 5, t = (d * Math.PI) / 180, len = d % 60 === 0 ? 13 : d % 30 === 0 ? 8 : 3.5;
+  return { x0: 184 * Math.cos(t), y0: 184 * Math.sin(t), x1: (184 - len) * Math.cos(t), y1: (184 - len) * Math.sin(t), major: d % 60 === 0 };
+});
+---
+<Figure n="02" title="Hexagon II" class="rh">
+  <span slot="hud" data-readout>--</span>
+
+  <div class="stage">
+    <svg class="hex" viewBox="-198 -198 396 396" role="img" aria-labelledby="rh-title">
+      <title id="rh-title">The trig hexagon, read by opposites and neighbours. Opposite corners through the centre multiply to 1; each rim corner equals the product of its two rim neighbours.</title>
+      <g class="ring">
+        <circle r="184" />
+        {ticks.map((t) => <line class:list={{ major: t.major }} x1={f(t.x0)} y1={f(t.y0)} x2={f(t.x1)} y2={f(t.y1)} />)}
+      </g>
+      {RIM.map((a, i) => {
+        const b = RIM[(i + 1) % 6];
+        return <line class="edge" data-e={`${a}-${b}`} x1={f(P[a][0])} y1={f(P[a][1])} x2={f(P[b][0])} y2={f(P[b][1])} />;
+      })}
+      {DIAM.map(([a, b], i) => (
+        <line class="diam" data-key={String(i + 1)} data-d={a} x1={f(P[a][0])} y1={f(P[a][1])} x2={f(P[b][0])} y2={f(P[b][1])} />
+      ))}
+      <line class="chord" x1="0" y1="0" x2="0" y2="0" />
+      {[0, 1].map((i) => (
+        <g class="bub" data-b={i} transform="translate(0 0)">
+          <circle r="11" />
+          <text>×</text>
+        </g>
+      ))}
+      {Object.keys(P).map((n) => (
+        <g class:list={["node", { one: n === "one" }]} data-n={n} tabindex="0" role="button" aria-label={label(n)}>
+          <circle class="hit" cx={f(P[n][0])} cy={f(P[n][1])} r={NODE + 6} />
+          <circle class="disc" cx={f(P[n][0])} cy={f(P[n][1])} r={NODE} />
+          <text class="name" x={f(P[n][0])} y={f(P[n][1])}>{label(n)}</text>
+        </g>
+      ))}
+    </svg>
+
+    <div class="key">
+      <span class="label">Key</span>
+      <svg class="legend" viewBox="-96 -60 192 256" role="img" aria-label="Key. Opposites: a times b equals 1. Neighbours: the middle corner b equals a times c.">
+        <g class="kopp">
+          <line class="diam lit" x1="-62" y1="-20" x2="62" y2="-20" />
+          <g class="node arg"><circle class="disc" cx="-62" cy="-20" r="20" /><text class="name" data-slot="oa" x="-62" y="-20">a</text></g>
+          <g class="node res one"><circle class="disc" cx="0" cy="-20" r="20" /><text class="name" x="0" y="-20">1</text></g>
+          <g class="node arg"><circle class="disc" cx="62" cy="-20" r="20" /><text class="name" data-slot="ob" x="62" y="-20">b</text></g>
+          <text class="cap" x="0" y="22">a · b = 1</text>
+        </g>
+        <g class="knb" transform="translate(0 70)">
+          <line class="edge lit" x1="-62" y1="98" x2="0" y2="44" />
+          <line class="edge lit" x1="0" y1="44" x2="62" y2="98" />
+          <line class="chord lit" x1="-62" y1="98" x2="62" y2="98" />
+          <g class="bub lit" transform="translate(0 98)"><circle r="11" /><text>×</text></g>
+          <g class="bub lit eq" transform="translate(0 74)"><circle r="9" /><text>=</text></g>
+          <g class="node arg"><circle class="disc" cx="-62" cy="98" r="20" /><text class="name" data-slot="na" x="-62" y="98">a</text></g>
+          <g class="node res"><circle class="disc" cx="0" cy="44" r="20" /><text class="name" data-slot="nb" x="0" y="44">b</text></g>
+          <g class="node arg"><circle class="disc" cx="62" cy="98" r="20" /><text class="name" data-slot="nc" x="62" y="98">c</text></g>
+          <text class="cap" x="0" y="8">b = a · c</text>
+        </g>
+      </svg>
+    </div>
+  </div>
+</Figure>
+
+<script>
+  import { decode, reduce } from "../../scripts/decode";
+  import { mountGlitch } from "../../scripts/glitch";
+  import { onSheet } from "./geom";
+
+  const R = 150, H = (R * Math.sqrt(3)) / 2;
+  const P: Record<string, [number, number]> = {
+    sin: [-R / 2, -H], cos: [R / 2, -H], tan: [-R, 0], one: [0, 0], cot: [R, 0], sec: [-R / 2, H], csc: [R / 2, H],
+  };
+  const RIM = ["sin", "cos", "cot", "csc", "sec", "tan"];
+  const OPP: Record<string, string> = { sin: "csc", csc: "sin", cos: "sec", sec: "cos", tan: "cot", cot: "tan" };
+  const lbl = (n: string) => (n === "one" ? "1" : n);
+  const mid = (a: string, b: string): [number, number] => [(P[a][0] + P[b][0]) / 2, (P[a][1] + P[b][1]) / 2];
+
+  interface State {
+    res?: string[]; arg?: string[]; edges?: [string, string][]; diam?: string[];
+    chord?: [string, string]; bubs?: { at: [number, number]; op: string }[];
+    text: string; key?: "opp" | "nb"; slots?: string[];
+  }
+
+  const product = (x: string): State => {
+    const i = RIM.indexOf(x), a = RIM[(i + 5) % 6], c = RIM[(i + 1) % 6];
+    const m = mid(a, c);
+    return {
+      res: [x], arg: [a, c], edges: [[a, x], [x, c]], chord: [a, c],
+      bubs: [{ at: m, op: "×" }, { at: [(m[0] + P[x][0]) / 2, (m[1] + P[x][1]) / 2], op: "=" }],
+      text: `${x} = ${a} · ${c}`, key: "nb", slots: [a, x, c],
+    };
+  };
+  const recip = (a: string): State => ({ res: ["one"], arg: [a, OPP[a]], diam: [a], text: `${a} · ${OPP[a]} = 1`, key: "opp", slots: [a, OPP[a]] });
+  const quot = (x: string, a: string, b: string): State => ({
+    res: [x], arg: [a, b], edges: [[x, a], [a, b]],
+    bubs: [{ at: mid(x, a), op: "=" }, { at: mid(a, b), op: "÷" }],
+    text: `${x} = ${a} ÷ ${b}`,
+  });
+  const ROWS: Record<string, State> = {
+    "1": recip("sin"), "2": recip("cos"), "3": recip("tan"),
+    "4": quot("tan", "sin", "cos"), "5": quot("cot", "cos", "sin"), "6": product("sin"),
+  };
+  const ALL: State = { res: ["one"], arg: RIM, diam: ["sin", "cos", "tan"], text: "sin·csc = cos·sec = tan·cot = 1", key: "opp" };
+
+  for (const svg of document.querySelectorAll<SVGSVGElement>(".rh .hex")) {
+    const fig = svg.closest<HTMLElement>(".rh")!;
+    const readout = fig.querySelector<HTMLElement>("[data-readout]")!;
+    const calmText = readout.textContent ?? "";
+    const nodes = svg.querySelectorAll<SVGGElement>(".node");
+    const edges = svg.querySelectorAll<SVGLineElement>(".edge");
+    const diams = svg.querySelectorAll<SVGLineElement>(".diam");
+    const chord = svg.querySelector<SVGLineElement>(".chord")!;
+    const bubs = svg.querySelectorAll<SVGGElement>(".bub");
+    const slots = fig.querySelectorAll<SVGTextElement>(".legend [data-slot]");
+    const kopp = fig.querySelector(".legend .kopp")!, knb = fig.querySelector(".legend .knb")!;
+    const { burst } = mountGlitch(svg);
+
+    let sheetKey = "", local = "";
+    const setSlot = (name: string, v: string) => {
+      const el = [...slots].find((s) => s.dataset.slot === name);
+      if (!el || el.dataset.decodeText === v) return;
+      el.dataset.decodeText = v;
+      el.classList.toggle("up", v === "1");
+      if (reduce) el.textContent = v; else decode(el, 320);
+    };
+
+    const render = () => {
+      const s: State | null = local ? (local === "one" ? ALL : product(local)) : ROWS[sheetKey] ?? null;
+      fig.toggleAttribute("data-active", !!s);
+      nodes.forEach((n) => {
+        const k = n.dataset.n!;
+        n.classList.toggle("res", !!s?.res?.includes(k));
+        n.classList.toggle("arg", !!s?.arg?.includes(k));
+      });
+      edges.forEach((e) => {
+        const [a, b] = e.dataset.e!.split("-");
+        e.classList.toggle("lit", !!s?.edges?.some(([x, y]) => (x === a && y === b) || (x === b && y === a)));
+      });
+      diams.forEach((d) => d.classList.toggle("lit", !!s?.diam?.includes(d.dataset.d!)));
+      chord.classList.toggle("lit", !!s?.chord);
+      if (s?.chord) {
+        const [a, c] = s.chord;
+        chord.setAttribute("x1", String(P[a][0])); chord.setAttribute("y1", String(P[a][1]));
+        chord.setAttribute("x2", String(P[c][0])); chord.setAttribute("y2", String(P[c][1]));
+      }
+      bubs.forEach((b, i) => {
+        const d = s?.bubs?.[i];
+        b.classList.toggle("lit", !!d);
+        if (d) { b.setAttribute("transform", `translate(${d.at[0].toFixed(1)} ${d.at[1].toFixed(1)})`); b.querySelector("text")!.textContent = d.op; }
+      });
+      readout.textContent = s ? s.text : calmText;
+      kopp.classList.toggle("dim", s?.key === "nb");
+      knb.classList.toggle("dim", s?.key === "opp");
+      const sl = s?.slots;
+      if (s?.key === "opp") { setSlot("oa", sl?.[0] ?? "a"); setSlot("ob", sl?.[1] ?? "b"); }
+      else if (s?.key === "nb") { setSlot("na", sl![0]); setSlot("nb", sl![1]); setSlot("nc", sl![2]); }
+      else { ["oa", "ob", "na", "nb", "nc"].forEach((k, i) => setSlot(k, ["a", "b", "a", "b", "c"][i])); }
+      burst(s ? 110 : 60);
+    };
+
+    onSheet(fig, (k) => { sheetKey = k; render(); });
+    let touch = false;
+    svg.addEventListener("pointerdown", (e) => { touch = e.pointerType === "touch"; });
+    for (const n of nodes) {
+      const k = n.dataset.n!;
+      n.addEventListener("pointerenter", (e) => { if (e.pointerType !== "touch") { local = k; render(); } });
+      n.addEventListener("pointerleave", (e) => { if (e.pointerType !== "touch" && local === k) { local = ""; render(); } });
+      n.addEventListener("click", () => { if (touch) { local = local === k ? "" : k; render(); } });
+      n.addEventListener("focus", () => { if (!touch) { local = k; render(); } });
+      n.addEventListener("blur", () => { if (local === k) { local = ""; render(); } });
+    }
+    document.addEventListener("pointerdown", (e) => { if (local && !svg.contains(e.target as Node)) { local = ""; render(); } });
+  }
+</script>
+
+<style>
+  .stage { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; }
+  .hex { width: 100%; max-width: 500px; height: auto; justify-self: center; overflow: visible; }
+  .key { display: grid; gap: 6px; justify-items: start; padding-bottom: 6px; }
+  .legend { width: 148px; height: auto; overflow: visible; }
+  @media (max-width: 620px) {
+    .stage { grid-template-columns: 1fr; }
+    .key { grid-template-columns: auto auto; align-items: center; justify-content: center; gap: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+    .legend { width: 124px; }
+  }
+
+  .ring circle { fill: none; stroke: var(--line); }
+  .ring line { stroke: var(--line-2); }
+  .ring line.major { stroke: var(--paper-2); stroke-opacity: 0.5; }
+
+  .edge { stroke: var(--line-2); stroke-width: 1.25; transition: stroke 0.3s var(--ease), stroke-width 0.3s var(--ease); }
+  .edge.lit { stroke: var(--paper); stroke-width: 2.5; }
+  .diam { stroke: var(--cyan); stroke-opacity: 0.55; stroke-width: 1.25; transition: stroke-opacity 0.3s var(--ease), stroke-width 0.3s var(--ease); }
+  :global(.rh[data-active]) .hex .diam { stroke-opacity: 0.12; }
+  :global(.rh[data-active]) .hex .diam.lit, .diam.lit { stroke-opacity: 1; stroke-width: 2.5; }
+  .chord { stroke: var(--paper-2); stroke-dasharray: 3 4; opacity: 0; transition: opacity 0.3s var(--ease-snap); }
+  .chord.lit { opacity: 1; }
+
+  .bub { opacity: 0; transition: opacity 0.25s var(--ease-snap); pointer-events: none; }
+  .bub.lit { opacity: 1; }
+  .bub circle { fill: var(--ink); stroke: var(--paper-2); stroke-width: 1.1; }
+  .bub text { fill: var(--paper); font: 500 14px var(--mono); text-anchor: middle; dominant-baseline: central; }
+
+  .node { cursor: pointer; outline: none; }
+  .hit { fill: transparent; }
+  .disc { fill: var(--ink-3); stroke: var(--line-2); stroke-width: 1.25; transition: stroke 0.3s var(--ease); }
+  .one .disc { stroke: var(--paper-2); stroke-width: 1.5; }
+  .name { fill: var(--paper); font: italic 400 25px var(--serif); text-anchor: middle; dominant-baseline: central; pointer-events: none; transition: opacity 0.3s var(--ease); }
+  .one .name, .name.up { font-style: normal; font-size: 30px; }
+  .node:focus-visible .disc { stroke: var(--paper); stroke-dasharray: 3 3; }
+  :global(.rh[data-active]) .hex .node:not(.res):not(.arg) .name { opacity: 0.35; }
+  .node.arg .disc { stroke: var(--cyan); stroke-width: 1.75; }
+  .node.res .disc { stroke: var(--hot); stroke-width: 1.75; }
+
+  .legend { font-size: 10px; }
+  .legend .name { font-size: 20px; }
+  .legend .name.up, .legend .one .name { font-size: 23px; }
+  .legend .node { cursor: default; }
+  .cap { fill: var(--dim); font: 500 11px var(--mono); letter-spacing: 0.06em; text-anchor: middle; }
+  .kopp, .knb { transition: opacity 0.3s var(--ease); }
+  .kopp.dim, .knb.dim { opacity: 0.25; }
+</style>

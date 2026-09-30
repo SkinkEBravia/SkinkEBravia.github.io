@@ -3,6 +3,7 @@
 // Each shaded, downward triangle is one Pythagorean identity:
 // top-left² + top-right² = bottom². The key beside it shows that rule alone.
 // Meant to sit inside <Sheet>; triangle n is linked to list item n.
+import Figure from "./Figure.astro";
 const R = 150;
 const H = (R * Math.sqrt(3)) / 2;
 const P = {
@@ -40,11 +41,8 @@ const hexagon = pts(["sin", "cos", "cot", "csc", "sec", "tan"]);
 const L = { a: [-62, -40], b: [62, -40], c: [0, 67.4] } as const;
 const LN = 22;
 ---
-<figure class="hx" data-hexfig data-reveal>
-  <figcaption class="hud label">
-    <span>Fig 01 · Hexagon</span>
-    <span>Tri <b data-readout>--</b> / 03</span>
-  </figcaption>
+<Figure n="01" title="Hexagon" class="hx">
+  <span slot="hud">TRI <b data-readout>--</b> / 03</span>
 
   <div class="stage">
     <svg class="hex" viewBox="-198 -198 396 396" role="img" aria-labelledby="hx-title hx-desc">
@@ -56,23 +54,8 @@ const LN = 22;
           <stop offset="0.55" class="st-cyan" stop-opacity="0.1" />
           <stop offset="1" class="st-hot" stop-opacity="0.2" />
         </linearGradient>
-        <filter id="hx-tint-hot" x="-5%" y="-5%" width="110%" height="110%">
-          <feColorMatrix type="luminanceToAlpha" result="lum" />
-          <feComponentTransfer in="lum" result="key"><feFuncA type="linear" slope="1.6" /></feComponentTransfer>
-          <feFlood class="fl-hot" />
-          <feComposite in2="key" operator="in" />
-        </filter>
-        <filter id="hx-tint-cyan" x="-5%" y="-5%" width="110%" height="110%">
-          <feColorMatrix type="luminanceToAlpha" result="lum" />
-          <feComponentTransfer in="lum" result="key"><feFuncA type="linear" slope="1.6" /></feComponentTransfer>
-          <feFlood class="fl-cyan" />
-          <feComposite in2="key" operator="in" />
-        </filter>
-        <clipPath id="hx-bands">{[0, 1, 2, 3, 4].map(() => <rect x="-198" width="396" y="0" height="0" />)}</clipPath>
-        <clipPath id="hx-tear">{[0, 1].map(() => <rect x="-198" width="396" y="0" height="0" />)}</clipPath>
       </defs>
 
-      <g id="hx-art">
         <g class="ring">
           <circle r="184" />
           {ticks.map((t) => <line class:list={{ major: t.major }} x1={f(t.x0)} y1={f(t.y0)} x2={f(t.x1)} y2={f(t.y1)} />)}
@@ -104,18 +87,6 @@ const LN = 22;
             <text class="sq" x={f(P[n][0] + NODE * 0.78)} y={f(P[n][1] - NODE * 0.78)}>2</text>
           </g>
         ))}
-      </g>
-
-      <g class="ghost" aria-hidden="true">
-        <g clip-path="url(#hx-tear)">
-          <rect class="tear-bg" x="-198" y="-198" width="396" height="396" />
-          <use href="#hx-art" />
-        </g>
-        <g clip-path="url(#hx-bands)" class="split">
-          <use href="#hx-art" filter="url(#hx-tint-hot)" />
-          <use href="#hx-art" filter="url(#hx-tint-cyan)" />
-        </g>
-      </g>
     </svg>
 
     <div class="key">
@@ -147,55 +118,19 @@ const LN = 22;
       </svg>
     </div>
   </div>
-</figure>
+</Figure>
 
 <script>
   import { decode, reduce } from "../../scripts/decode";
+  import { mountGlitch } from "../../scripts/glitch";
 
   const TRIS = [["sin", "cos", "1"], ["tan", "1", "sec"], ["1", "cot", "csc"]];
-  const rand = (a: number, b: number) => a + Math.random() * (b - a);
 
-  for (const fig of document.querySelectorAll<HTMLElement>("[data-hexfig]")) {
-    const svg = fig.querySelector<SVGSVGElement>(".hex")!;
-    const ghost = svg.querySelector<SVGGElement>(".ghost")!;
-    const bands = svg.querySelectorAll<SVGRectElement>("#hx-bands rect");
-    const tears = svg.querySelectorAll<SVGRectElement>("#hx-tear rect");
-    const [tearUse] = svg.querySelectorAll<SVGUseElement>(".ghost > g:first-child use");
-    const [hotUse, cyanUse] = svg.querySelectorAll<SVGUseElement>(".split use");
+  for (const svg of document.querySelectorAll<SVGSVGElement>(".hx .hex")) {
+    const fig = svg.closest<HTMLElement>(".hx")!;
     const readout = fig.querySelector<HTMLElement>("[data-readout]")!;
     const slots = fig.querySelectorAll<SVGTextElement>(".legend [data-slot]");
-
-    // Chroma split and slice tears, reseeded every second frame so the blocks
-    // read as codec errors rather than noise.
-    let until = 0, raf = 0, frame = 0;
-    const band = (r: SVGRectElement, hMin: number, hMax: number) => {
-      r.setAttribute("y", rand(-198, 170).toFixed(1));
-      r.setAttribute("height", rand(hMin, hMax).toFixed(1));
-    };
-    const step = (now: number) => {
-      if (now >= until) { ghost.style.opacity = "0"; raf = 0; return; }
-      if (frame++ % 2 === 0) {
-        bands.forEach((r) => band(r, 4, 42));
-        tears.forEach((r) => band(r, 3, 18));
-        const dx = rand(3, 11) * (Math.random() < 0.5 ? -1 : 1);
-        hotUse.setAttribute("transform", `translate(${dx.toFixed(1)} 0)`);
-        cyanUse.setAttribute("transform", `translate(${(-dx * 0.8).toFixed(1)} 0)`);
-        tearUse.setAttribute("transform", `translate(${rand(-24, 24).toFixed(1)} 0)`);
-        ghost.style.opacity = "1";
-      }
-      raf = requestAnimationFrame(step);
-    };
-    const burst = (ms: number) => {
-      if (reduce) return;
-      until = Math.max(until, performance.now() + ms);
-      if (!raf) { frame = 0; raf = requestAnimationFrame(step); }
-    };
-
-    // one burst when the figure first arrives on screen
-    const io = new IntersectionObserver((es) => {
-      if (es.some((e) => e.isIntersecting)) { io.disconnect(); setTimeout(() => burst(560), 280); }
-    }, { threshold: 0.5 });
-    io.observe(fig);
+    const { burst } = mountGlitch(svg);
 
     fig.closest("[data-sheet]")?.addEventListener("sheet:active", (e) => {
       const k = (e as CustomEvent<string>).detail;
@@ -213,29 +148,7 @@ const LN = 22;
 </script>
 
 <style>
-  .hx {
-    position: relative;
-    margin: 0 !important;
-    max-width: none !important;
-    padding: clamp(14px, 2vw, 22px);
-    border: 1px solid var(--line);
-    background:
-      repeating-linear-gradient(to bottom, color-mix(in srgb, var(--paper) 2.5%, transparent) 0 1px, transparent 1px 3px),
-      radial-gradient(90% 70% at 42% 22%, color-mix(in srgb, var(--cyan) 7%, transparent), transparent 62%),
-      radial-gradient(70% 55% at 62% 104%, color-mix(in srgb, var(--hot) 6%, transparent), transparent 70%),
-      var(--ink-2);
-  }
-  /* crop marks */
-  .hx::before, .hx::after {
-    content: ""; position: absolute; width: 12px; height: 12px; pointer-events: none;
-    border: 0 solid var(--paper-2);
-  }
-  .hx::before { left: -1px; top: -1px; border-left-width: 1px; border-top-width: 1px; }
-  .hx::after { right: -1px; bottom: -1px; border-right-width: 1px; border-bottom-width: 1px; }
-
-  .hud { display: flex; justify-content: space-between; gap: 12px; margin: 0 !important; }
-  .hud b { color: var(--paper); font-weight: 500; }
-  .hx[data-active] .hud b { color: var(--hot); }
+  :global(.hx[data-active]) b[data-readout] { color: var(--hot); }
 
   .stage {
     display: grid;
@@ -258,9 +171,7 @@ const LN = 22;
   /* ---- drawing */
   .st-cyan { stop-color: var(--cyan); }
   .st-hot { stop-color: var(--hot); }
-  .fl-hot { flood-color: var(--hot); }
-  .fl-cyan { flood-color: var(--cyan); }
-
+  
   .ring circle { fill: none; stroke: var(--line); }
   .ring line { stroke: var(--line-2); stroke-width: 1; }
   .ring line.major { stroke: var(--paper-2); stroke-opacity: 0.5; }
@@ -275,8 +186,8 @@ const LN = 22;
     transition: fill-opacity 0.4s var(--ease), stroke-opacity 0.4s var(--ease);
   }
   .key-tri { fill: url(#hx-key-fill); cursor: default; }
-  .hx[data-active] .hex .tri { fill-opacity: 0.25; stroke-opacity: 0.25; }
-  .hx[data-active] .hex .tri[data-on] { fill-opacity: 1; stroke-opacity: 1; }
+  :global(.hx[data-active]) .hex .tri { fill-opacity: 0.25; stroke-opacity: 0.25; }
+  :global(.hx[data-active]) .hex .tri[data-on] { fill-opacity: 1; stroke-opacity: 1; }
 
   .glyph { opacity: 0; transition: opacity 0.3s var(--ease-snap); pointer-events: none; }
   .glyph line, .glyph path { fill: none; stroke: var(--paper-2); stroke-width: 1.1; }
@@ -315,23 +226,19 @@ const LN = 22;
   .legend [data-role="c"] .sq { fill: var(--hot); }
 
   /* the active triangle in the hexagon turns into the key */
-  .hx[data-active="1"] .glyph[data-k="1"], .hx[data-active="2"] .glyph[data-k="2"], .hx[data-active="3"] .glyph[data-k="3"] { opacity: 1; }
-  .hx[data-active="1"] .idx[data-k="1"], .hx[data-active="2"] .idx[data-k="2"], .hx[data-active="3"] .idx[data-k="3"] { opacity: 0; }
-  .hx[data-active="1"] .hex .node:not([data-r1]) .name,
-  .hx[data-active="2"] .hex .node:not([data-r2]) .name,
-  .hx[data-active="3"] .hex .node:not([data-r3]) .name { opacity: 0.35; }
-  .hx[data-active="1"] [data-r1] .sq, .hx[data-active="2"] [data-r2] .sq, .hx[data-active="3"] [data-r3] .sq { opacity: 1; }
-  .hx[data-active="1"] [data-r1="a"] .disc, .hx[data-active="1"] [data-r1="b"] .disc,
-  .hx[data-active="2"] [data-r2="a"] .disc, .hx[data-active="2"] [data-r2="b"] .disc,
-  .hx[data-active="3"] [data-r3="a"] .disc, .hx[data-active="3"] [data-r3="b"] .disc { stroke: var(--cyan); }
-  .hx[data-active="1"] [data-r1="a"] .sq, .hx[data-active="1"] [data-r1="b"] .sq,
-  .hx[data-active="2"] [data-r2="a"] .sq, .hx[data-active="2"] [data-r2="b"] .sq,
-  .hx[data-active="3"] [data-r3="a"] .sq, .hx[data-active="3"] [data-r3="b"] .sq { fill: var(--cyan); }
-  .hx[data-active="1"] [data-r1="c"] .disc, .hx[data-active="2"] [data-r2="c"] .disc, .hx[data-active="3"] [data-r3="c"] .disc { stroke: var(--hot); }
-  .hx[data-active="1"] [data-r1="c"] .sq, .hx[data-active="2"] [data-r2="c"] .sq, .hx[data-active="3"] [data-r3="c"] .sq { fill: var(--hot); }
+  :global(.hx[data-active="1"]) .glyph[data-k="1"], :global(.hx[data-active="2"]) .glyph[data-k="2"], :global(.hx[data-active="3"]) .glyph[data-k="3"] { opacity: 1; }
+  :global(.hx[data-active="1"]) .idx[data-k="1"], :global(.hx[data-active="2"]) .idx[data-k="2"], :global(.hx[data-active="3"]) .idx[data-k="3"] { opacity: 0; }
+  :global(.hx[data-active="1"]) .hex .node:not([data-r1]) .name,
+  :global(.hx[data-active="2"]) .hex .node:not([data-r2]) .name,
+  :global(.hx[data-active="3"]) .hex .node:not([data-r3]) .name { opacity: 0.35; }
+  :global(.hx[data-active="1"]) [data-r1] .sq, :global(.hx[data-active="2"]) [data-r2] .sq, :global(.hx[data-active="3"]) [data-r3] .sq { opacity: 1; }
+  :global(.hx[data-active="1"]) [data-r1="a"] .disc, :global(.hx[data-active="1"]) [data-r1="b"] .disc,
+  :global(.hx[data-active="2"]) [data-r2="a"] .disc, :global(.hx[data-active="2"]) [data-r2="b"] .disc,
+  :global(.hx[data-active="3"]) [data-r3="a"] .disc, :global(.hx[data-active="3"]) [data-r3="b"] .disc { stroke: var(--cyan); }
+  :global(.hx[data-active="1"]) [data-r1="a"] .sq, :global(.hx[data-active="1"]) [data-r1="b"] .sq,
+  :global(.hx[data-active="2"]) [data-r2="a"] .sq, :global(.hx[data-active="2"]) [data-r2="b"] .sq,
+  :global(.hx[data-active="3"]) [data-r3="a"] .sq, :global(.hx[data-active="3"]) [data-r3="b"] .sq { fill: var(--cyan); }
+  :global(.hx[data-active="1"]) [data-r1="c"] .disc, :global(.hx[data-active="2"]) [data-r2="c"] .disc, :global(.hx[data-active="3"]) [data-r3="c"] .disc { stroke: var(--hot); }
+  :global(.hx[data-active="1"]) [data-r1="c"] .sq, :global(.hx[data-active="2"]) [data-r2="c"] .sq, :global(.hx[data-active="3"]) [data-r3="c"] .sq { fill: var(--hot); }
 
-  /* glitch layers, hidden unless a burst is running */
-  .ghost { opacity: 0; pointer-events: none; }
-  .tear-bg { fill: var(--ink-2); }
-  .split use { mix-blend-mode: screen; opacity: 0.8; }
 </style>

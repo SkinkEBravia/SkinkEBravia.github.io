@@ -1,0 +1,80 @@
+---
+// The panel every cheat-sheet figure sits in: ink panel with a soft studio
+// light, faint scanlines and crop marks, a mono HUD line on top.
+//
+//   <Figure n="02" title="Hexagon" modes={["Lengths", "Signs"]}>
+//     <span slot="hud">Tri <b data-readout>--</b></span>
+//     ...svg...
+//   </Figure>
+//
+// With `modes`, a row of mode buttons is drawn under the HUD. Clicking one sets
+// data-mode="<index>" on the <figure> (default "0") and fires a "figure:mode"
+// event on it with the index as detail.
+interface Props { n: string; title: string; modes?: string[]; class?: string }
+const { n, title, modes, class: cls } = Astro.props;
+---
+<figure class:list={["fig", cls]} data-fig data-mode="0" data-reveal>
+  <figcaption class="hud label">
+    <span>Fig {n} · {title}</span>
+    <span class="hud-r"><slot name="hud" /></span>
+  </figcaption>
+  {modes && (
+    <div class="modes" role="group" aria-label="View">
+      {modes.map((m, i) => <button type="button" class="label" data-mode-btn={i} aria-pressed={i === 0 ? "true" : "false"}>{m}</button>)}
+    </div>
+  )}
+  <slot />
+</figure>
+
+<style>
+  .fig {
+    position: relative;
+    margin: 0 !important;
+    max-width: none !important;
+    padding: clamp(14px, 2vw, 22px);
+    border: 1px solid var(--line);
+    background:
+      repeating-linear-gradient(to bottom, color-mix(in srgb, var(--paper) 2.5%, transparent) 0 1px, transparent 1px 3px),
+      radial-gradient(90% 70% at 42% 22%, color-mix(in srgb, var(--cyan) 7%, transparent), transparent 62%),
+      radial-gradient(70% 55% at 62% 104%, color-mix(in srgb, var(--hot) 6%, transparent), transparent 70%),
+      var(--ink-2);
+  }
+  /* crop marks */
+  .fig::before, .fig::after {
+    content: ""; position: absolute; width: 12px; height: 12px; pointer-events: none;
+    border: 0 solid var(--paper-2);
+  }
+  .fig::before { left: -1px; top: -1px; border-left-width: 1px; border-top-width: 1px; }
+  .fig::after { right: -1px; bottom: -1px; border-right-width: 1px; border-bottom-width: 1px; }
+
+  .hud { display: flex; justify-content: space-between; gap: 12px; margin: 0 !important; }
+  .hud :global(b) { color: var(--paper); font-weight: 500; }
+  /* readouts carry maths (θ, α, sin): never uppercase them */
+  .hud-r { text-transform: none; }
+
+  .modes { display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
+  .modes button {
+    padding: 0.55em 0.9em;
+    border: 1px solid var(--line-2);
+    border-radius: 999px;
+    color: var(--dim);
+    transition: color 0.3s var(--ease), border-color 0.3s var(--ease), background 0.3s var(--ease);
+  }
+  .modes button:hover { color: var(--paper); border-color: var(--paper-2); }
+  .modes button[aria-pressed="true"] { color: var(--ink); background: var(--paper); border-color: var(--paper); }
+</style>
+
+<script>
+  for (const fig of document.querySelectorAll<HTMLElement>("[data-fig]")) {
+    const btns = fig.querySelectorAll<HTMLButtonElement>(":scope > .modes [data-mode-btn]");
+    for (const b of btns) {
+      b.addEventListener("click", () => {
+        const m = b.dataset.modeBtn!;
+        if (fig.dataset.mode === m) return;
+        fig.dataset.mode = m;
+        btns.forEach((o) => o.setAttribute("aria-pressed", String(o === b)));
+        fig.dispatchEvent(new CustomEvent("figure:mode", { detail: +m }));
+      });
+    }
+  }
+</script>

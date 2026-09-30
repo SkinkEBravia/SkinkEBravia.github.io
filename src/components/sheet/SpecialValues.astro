@@ -1,0 +1,133 @@
+---
+// The √n/2 staircase: sin 0°, 30°, 45°, 60°, 90° = √0/2 … √4/2.
+// Mode "cos" plays the same staircase backwards (cos θ = sin(90° − θ)).
+// Hover a bar for its value; row 3 adds the tan row underneath.
+import Figure from "./Figure.astro";
+
+const ANG = [0, 30, 45, 60, 90];
+const X = ANG.map((_, i) => 64 + i * 88);
+const BASE = 252, HMAX = 160, BW = 46;
+const SIMPLE = ["0", "1/2", "√2/2", "√3/2", "1"];
+const TAN = ["0", "1/√3", "1", "√3", "—"];
+---
+<Figure n="04" title="Staircase" modes={["sin", "cos"]} class="sv">
+  <span slot="hud" data-readout>n = 0 1 2 3 4</span>
+
+  <svg class="plot" viewBox="0 0 480 338" role="img" aria-label="Five bars for 0, 30, 45, 60 and 90 degrees with heights root 0 over 2, root 1 over 2, root 2 over 2, root 3 over 2 and root 4 over 2: the sines. Read backwards they are the cosines.">
+    <text class="fn" data-key="1" x="14" y="40" data-fname>sin</text>
+    <g class="mirror" data-key="2">
+      <text class="note" x="466" y="24" text-anchor="end">cos θ = sin(90° − θ)</text>
+      <path class="arrow" d="M456 38 H300 M306 33 L300 38 L306 43" />
+    </g>
+    <line class="grid" x1="20" y1={BASE - HMAX} x2="460" y2={BASE - HMAX} />
+    <line class="grid" x1="20" y1={BASE - HMAX / 2} x2="460" y2={BASE - HMAX / 2} />
+    <text class="tick" x="20" y={BASE - HMAX - 5}>1</text>
+    <text class="tick" x="20" y={BASE - HMAX / 2 - 5}>½</text>
+    <line class="base" x1="20" y1={BASE} x2="460" y2={BASE} />
+
+    {ANG.map((a, i) => {
+      const v = Math.sqrt(i) / 2;
+      return (
+        <g class="bar" data-bar={i} tabindex="0">
+          <rect class="hit" x={X[i] - 44} y={BASE - HMAX - 40} width="88" height={HMAX + 110} />
+          <rect class="col" x={X[i] - BW / 2} y={BASE - HMAX} width={BW} height={HMAX} style={`transform: scaleY(${v})`} />
+          <rect class="cap" x={X[i] - BW / 2} y={BASE - 1} width={BW} height="2" style={`transform: translateY(${-HMAX * v}px)`} />
+          <text class="root" x={X[i]} y={BASE - 12} style={`transform: translateY(${-HMAX * v}px)`}>√<tspan class="n">{i}</tspan>/2</text>
+          <text class="deg" x={X[i]} y={BASE + 24}>{a}°</text>
+          <text class="val" x={X[i]} y={BASE + 46}>{SIMPLE[i]}</text>
+          <text class="tanv" x={X[i]} y={BASE + 76}>{TAN[i]}</text>
+        </g>
+      );
+    })}
+    <text class="tanl" data-key="3" x="14" y={BASE + 76}>tan</text>
+  </svg>
+</Figure>
+
+<script>
+  import { decode, reduce } from "../../scripts/decode";
+  import { mountGlitch } from "../../scripts/glitch";
+  import { onSheet } from "./geom";
+
+  const ANG = [0, 30, 45, 60, 90];
+  const SIMPLE = ["0", "1/2", "√2/2", "√3/2", "1"];
+  const TAN = ["0", "1/√3", "1", "√3", "—"];
+  const HMAX = 160;
+
+  for (const svg of document.querySelectorAll<SVGSVGElement>(".sv .plot")) {
+    const fig = svg.closest<HTMLElement>(".sv")!;
+    const readout = fig.querySelector<HTMLElement>("[data-readout]")!;
+    const calm = readout.textContent ?? "";
+    const fname = svg.querySelector<SVGTextElement>("[data-fname]")!;
+    const bars = [...svg.querySelectorAll<SVGGElement>(".bar")];
+    const { burst } = mountGlitch(svg);
+
+    let modeBtn = 0, shown = 0, rowKey = "", hover = -1;
+    const nOf = (i: number, m: number) => (m === 0 ? i : 4 - i);
+
+    const draw = () => {
+      const m = rowKey === "1" ? 0 : rowKey === "2" ? 1 : modeBtn;
+      fig.toggleAttribute("data-tan", rowKey === "3");
+      fig.dataset.show = String(m);
+      if (m !== shown) {
+        shown = m;
+        fname.dataset.decodeText = m ? "cos" : "sin";
+        if (reduce) fname.textContent = fname.dataset.decodeText; else decode(fname, 360);
+        bars.forEach((b, i) => {
+          const n = nOf(i, m), v = Math.sqrt(n) / 2;
+          b.querySelector<SVGRectElement>(".col")!.style.transform = `scaleY(${v})`;
+          b.querySelector<SVGRectElement>(".cap")!.style.transform = `translateY(${-HMAX * v}px)`;
+          b.querySelector<SVGTextElement>(".root")!.style.transform = `translateY(${-HMAX * v}px)`;
+          const nt = b.querySelector<SVGTSpanElement>(".n")!;
+          nt.dataset.decodeText = String(n);
+          if (reduce) nt.textContent = String(n); else decode(nt, 360);
+          b.querySelector(".val")!.textContent = SIMPLE[n];
+        });
+        burst(120);
+      }
+      bars.forEach((b, i) => b.classList.toggle("on", hover === i));
+      fig.toggleAttribute("data-hover", hover >= 0);
+      readout.textContent = hover >= 0
+        ? `${m ? "cos" : "sin"} ${ANG[hover]}° = ${SIMPLE[nOf(hover, m)]}${rowKey === "3" ? ` · tan ${TAN[hover]}` : ""}`
+        : calm;
+    };
+
+    fig.addEventListener("figure:mode", (e) => { modeBtn = (e as CustomEvent<number>).detail; draw(); });
+    onSheet(fig, (k) => { rowKey = k; draw(); });
+    bars.forEach((b, i) => {
+      b.addEventListener("pointerenter", () => { hover = i; draw(); });
+      b.addEventListener("pointerleave", () => { if (hover === i) { hover = -1; draw(); } });
+      b.addEventListener("focus", () => { hover = i; draw(); });
+      b.addEventListener("blur", () => { if (hover === i) { hover = -1; draw(); } });
+    });
+  }
+</script>
+
+<style>
+  .plot { width: 100%; height: auto; display: block; margin-top: 8px; overflow: visible; }
+  .fn { fill: var(--cyan); font: italic 400 34px var(--serif); cursor: default; }
+  .note { fill: var(--dim); font: italic 400 16px var(--serif); }
+  .arrow { fill: none; stroke: var(--dim); stroke-width: 1.1; }
+  .mirror { opacity: 0; transition: opacity 0.5s var(--ease); }
+  :global(.sv[data-show="1"]) .mirror { opacity: 1; }
+  .grid { stroke: var(--line); stroke-dasharray: 2 5; }
+  .base { stroke: var(--line-2); }
+  .tick { fill: var(--dim); font: 500 11px var(--mono); }
+
+  .bar { cursor: default; outline: none; transition: opacity 0.3s var(--ease); }
+  :global(.sv[data-hover]) .bar:not(.on) { opacity: 0.35; }
+  .hit { fill: transparent; }
+  .col, .cap, .root { transform-box: fill-box; transform-origin: 50% 100%; transition: transform 0.9s var(--ease); }
+  .cap, .root { transform-box: view-box; transform-origin: 0 0; }
+  .col { fill: color-mix(in srgb, var(--cyan) 16%, transparent); stroke: var(--cyan); stroke-width: 1.25; vector-effect: non-scaling-stroke; }
+  .cap { fill: var(--cyan); }
+  .bar.on .col { fill: color-mix(in srgb, var(--cyan) 30%, transparent); }
+  .root { fill: var(--cyan); font: italic 400 22px var(--serif); text-anchor: middle; }
+  .root .n { fill: var(--hot); font-style: normal; }
+  .deg { fill: var(--paper); font: 400 20px var(--serif); text-anchor: middle; }
+  .val { fill: var(--dim); font: italic 400 17px var(--serif); text-anchor: middle; }
+  .tanv, .tanl { opacity: 0; transition: opacity 0.4s var(--ease); }
+  .tanv { fill: var(--paper-2); font: italic 400 17px var(--serif); text-anchor: middle; }
+  .tanl { fill: var(--paper-2); font: italic 400 17px var(--serif); }
+  :global(.sv[data-tan]) .tanv, :global(.sv[data-tan]) .tanl { opacity: 1; }
+  .tanl { opacity: 0.35; }
+</style>

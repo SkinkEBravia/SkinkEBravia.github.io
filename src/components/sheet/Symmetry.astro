@@ -1,0 +1,210 @@
+---
+// Symmetry of the unit circle. Mode "Mirror": P at θ and its images π − θ, −θ,
+// π + θ and π/2 − θ. Mode "Turn": P turned a quarter each way, θ ± π/2, carrying
+// its right triangle along (the cos leg stands up, the sin leg lies down).
+// Rows 1–4 show one mirror each, rows 5–6 the turn. The square on the right is the
+// sign map: which functions are positive in each quadrant; hover a cell to see
+// where that function is positive on the circle. Drag P.
+import Figure from "./Figure.astro";
+import { at, deg } from "./geom";
+import { IMAGES, layout, VB } from "./sy";
+
+const L = layout(35 * deg);
+const vb = `${VB.x} ${VB.y} ${VB.w} ${VB.h}`;
+const R = 100;
+const wedge = (a0: number, a1: number) =>
+  `M0 0 L${R * Math.cos(a0)} ${-R * Math.sin(a0)} A${R} ${R} 0 ${a1 - a0 > Math.PI ? 1 : 0} 0 ${(R * Math.cos(a1)).toFixed(2)} ${(-R * Math.sin(a1)).toFixed(2)} Z`;
+const Q = Math.PI / 2;
+const MIRROR = IMAGES.slice(0, 4), TURN = IMAGES.slice(4);
+const CELLS = [
+  { q: 2, fn: "sin", also: "csc", x: 0, y: 0 },
+  { q: 1, fn: "all", also: "", x: 80, y: 0 },
+  { q: 3, fn: "tan", also: "cot", x: 0, y: 80 },
+  { q: 4, fn: "cos", also: "sec", x: 80, y: 80 },
+];
+---
+<Figure n="05" title="Symmetry" modes={["Mirror", "Turn"]} class="sy">
+  <span slot="hud">θ <b data-theta>35°</b></span>
+
+  <div class="stage">
+    <svg class="plot" viewBox={vb} role="img" aria-label="Unit circle with a point P at angle theta. Mirror view: its reflections at pi minus theta, minus theta, pi plus theta and pi over 2 minus theta. Turn view: P turned by plus and minus a quarter turn, with its right triangle.">
+      <g class="scopes">
+        <path class="sc" data-sc="all" d={wedge(0, Q)} />
+        <path class="sc" data-sc="sin" d={wedge(0, Math.PI)} />
+        <path class="sc" data-sc="cos" d={wedge(-Q, Q)} />
+        <path class="sc" data-sc="tan" d={`${wedge(0, Q)} ${wedge(Math.PI, 3 * Q)}`} />
+      </g>
+      <line class="axis m1" x1="0" y1={VB.y + 8} x2="0" y2={VB.y + VB.h - 8} />
+      <line class="axis m2" x1={VB.x + 8} y1="0" x2={VB.x + VB.w - 8} y2="0" />
+      <line class="mline m4" x1="-120" y1="120" x2="120" y2="-120" />
+      <text class="mlab m4" x="104" y="-120">y = x</text>
+      <line class="mline m3" data-g="tanline" {...at(L.tanline)} />
+      <circle class="circ" r="100" />
+
+      <g class="mirror">
+        {MIRROR.map((im, i) => (
+          <g class="img" data-key={String(i + 1)} data-img={im.k}>
+            <line class="legc" data-g={`${im.k}c`} {...at(L[`${im.k}c`])} />
+            <line class="legs" data-g={`${im.k}s`} {...at(L[`${im.k}s`])} />
+            <line class="irad" data-g={`${im.k}r`} {...at(L[`${im.k}r`])} />
+            <circle class="idot" r="4" data-g={`${im.k}d`} {...at(L[`${im.k}d`])} />
+            <text class="ilab" data-g={`${im.k}l`} {...at(L[`${im.k}l`])}>{L[`${im.k}l`].text}</text>
+          </g>
+        ))}
+      </g>
+      <g class="turn">
+        {TURN.map((im) => (
+          <g class="img" data-img={im.k}>
+            <path class="tarc" data-g={im.k === "rp" ? "arp" : "arm"} {...at(L[im.k === "rp" ? "arp" : "arm"])} />
+            <line class="legc" data-key="5" data-g={`${im.k}c`} {...at(L[`${im.k}c`])} />
+            <line class="legs" data-key="6" data-g={`${im.k}s`} {...at(L[`${im.k}s`])} />
+            <line class="irad" data-g={`${im.k}r`} {...at(L[`${im.k}r`])} />
+            <circle class="idot" r="4" data-g={`${im.k}d`} {...at(L[`${im.k}d`])} />
+            <text class="ilab" data-g={`${im.k}l`} {...at(L[`${im.k}l`])}>{L[`${im.k}l`].text}</text>
+          </g>
+        ))}
+      </g>
+
+      <line class="legc p" data-g="pc" {...at(L.pc)} />
+      <line class="legs p" data-g="ps" {...at(L.ps)} />
+      <line class="prad" data-g="rad" {...at(L.rad)} />
+      <path class="th-arc" data-g="arc" {...at(L.arc)} />
+      <circle class="pdot" r="4.5" data-g="P" {...at(L.P)} />
+      <text class="plab" data-g="lp" {...at(L.lp)}>{L.lp.text}</text>
+      <g class="handle" role="slider" aria-label="Angle theta" aria-valuemin="0" aria-valuemax="359" aria-valuenow="35">
+        <circle class="hit" r="20" data-g="handle" {...at(L.handle)} />
+        <circle class="ringh" r="10" data-g="handle" {...at(L.handle)} />
+      </g>
+    </svg>
+
+    <div class="key">
+      <span class="label">Positive</span>
+      <svg class="signs" viewBox="-2 -2 164 164" role="img" aria-label="Sign map. Quadrant I: all positive. II: sin and csc. III: tan and cot. IV: cos and sec.">
+        {CELLS.map((c) => (
+          <g class="cell" data-fn={c.fn} data-q={c.q} tabindex="0">
+            <rect x={c.x + 2} y={c.y + 2} width="76" height="76" />
+            <text class="qn" x={c.x + 9} y={c.y + 17}>{["I", "II", "III", "IV"][c.q - 1]}</text>
+            <text class="cf" x={c.x + 40} y={c.y + 48}>{c.fn}</text>
+            <text class="ca" x={c.x + 40} y={c.y + 66}>{c.also}</text>
+          </g>
+        ))}
+      </svg>
+    </div>
+  </div>
+</Figure>
+
+<script>
+  import { mountGlitch } from "../../scripts/glitch";
+  import { apply, deg, draggable, onSheet } from "./geom";
+  import { layout, quadrant } from "./sy";
+
+  for (const svg of document.querySelectorAll<SVGSVGElement>(".sy .plot")) {
+    const fig = svg.closest<HTMLElement>(".sy")!;
+    const thetaOut = fig.querySelector<HTMLElement>("[data-theta]")!;
+    const handle = svg.querySelector<SVGGElement>(".handle")!;
+    const cells = fig.querySelectorAll<SVGGElement>(".cell");
+    const { burst } = mountGlitch(svg);
+
+    let theta = 35 * deg, modeBtn = 0, row = "", shown = 0, q = 1;
+    const draw = () => {
+      apply(svg, layout(theta));
+      const t = ((theta % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+      const d = Math.round(t / deg) % 360;
+      thetaOut.textContent = `${d}°`;
+      handle.setAttribute("aria-valuenow", String(d));
+      const nq = quadrant(theta);
+      if (nq !== q) { q = nq; burst(70); }
+      cells.forEach((c) => c.classList.toggle("cur", +c.dataset.q! === q));
+    };
+    const show = () => {
+      const m = row && +row <= 4 ? 0 : row ? 1 : modeBtn;
+      if (row) fig.dataset.active = row; else delete fig.dataset.active;
+      if (m !== shown) { shown = m; burst(120); }
+      fig.dataset.show = String(m);
+    };
+
+    draggable(svg, handle, (p) => { theta = Math.atan2(-p.y, p.x); draw(); },
+      (dir, big) => { theta += dir * (big ? 15 : 1) * deg; draw(); });
+    fig.addEventListener("figure:mode", (e) => { modeBtn = (e as CustomEvent<number>).detail; show(); });
+    onSheet(fig, (k) => { row = k; show(); burst(k ? 90 : 40); });
+
+    const scope = (fn: string) => { if (fn) fig.dataset.scope = fn; else delete fig.dataset.scope; };
+    for (const c of cells) {
+      c.addEventListener("pointerenter", () => scope(c.dataset.fn!));
+      c.addEventListener("pointerleave", () => scope(""));
+      c.addEventListener("focus", () => scope(c.dataset.fn!));
+      c.addEventListener("blur", () => scope(""));
+      c.addEventListener("click", () => scope(fig.dataset.scope === c.dataset.fn ? "" : c.dataset.fn!));
+    }
+    fig.dataset.show = "0";
+    draw();
+  }
+</script>
+
+<style>
+  /* four function colours: sin hot, cos cyan, tan (= sin / cos) their mix, all paper */
+  :global(.sy) { --c-all: var(--paper); --c-sin: var(--hot); --c-cos: var(--cyan); --c-tan: color-mix(in srgb, var(--hot) 50%, var(--cyan)); }
+
+  .stage { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 12px; margin-top: 8px; }
+  .plot { width: 100%; height: auto; display: block; overflow: visible; }
+  .key { display: grid; gap: 8px; justify-items: start; padding-bottom: 8px; }
+  .signs { width: 140px; height: auto; overflow: visible; }
+  @media (max-width: 620px) {
+    .stage { grid-template-columns: 1fr; }
+    .key { grid-template-columns: auto auto; align-items: center; justify-content: center; gap: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+    .signs { width: 124px; }
+  }
+
+  .axis { stroke: var(--line-2); transition: stroke 0.3s var(--ease); }
+  .circ { fill: none; stroke: var(--paper-2); stroke-opacity: 0.55; stroke-width: 1.25; }
+  .mline { stroke: var(--paper-2); stroke-dasharray: 3 5; opacity: 0; transition: opacity 0.3s var(--ease); }
+  .mlab { fill: var(--dim); font: italic 400 14px var(--serif); opacity: 0; transition: opacity 0.3s var(--ease); }
+  :global(.sy[data-active="1"]) .m1, :global(.sy[data-active="2"]) .m2 { stroke: var(--paper); stroke-dasharray: 3 5; }
+  :global(.sy[data-active="3"]) .m3, :global(.sy[data-active="4"]) .m4 { opacity: 1; }
+
+  .sc { opacity: 0; transition: opacity 0.35s var(--ease); pointer-events: none; }
+  .sc[data-sc="all"] { fill: var(--c-all); } .sc[data-sc="sin"] { fill: var(--c-sin); }
+  .sc[data-sc="cos"] { fill: var(--c-cos); } .sc[data-sc="tan"] { fill: var(--c-tan); }
+  :global(.sy[data-scope="all"]) .sc[data-sc="all"], :global(.sy[data-scope="sin"]) .sc[data-sc="sin"],
+  :global(.sy[data-scope="cos"]) .sc[data-sc="cos"], :global(.sy[data-scope="tan"]) .sc[data-sc="tan"] { opacity: 0.2; }
+
+  .legc, .legs { stroke-width: 2.25; stroke-linecap: round; transition: opacity 0.3s var(--ease); }
+  .legc { stroke: var(--cyan); } .legs { stroke: var(--hot); }
+  .irad { stroke: var(--paper-2); stroke-width: 1; }
+  .idot { fill: var(--ink); stroke: var(--paper); stroke-width: 1.5; }
+  .ilab { fill: var(--paper-2); font: italic 400 17px var(--serif); }
+  .prad { stroke: var(--paper); stroke-width: 1.25; }
+  .pdot { fill: var(--paper); }
+  .plab { fill: var(--paper); font: italic 400 18px var(--serif); }
+  .th-arc { fill: none; stroke: var(--paper-2); }
+  .tarc { fill: none; stroke: var(--paper-2); stroke-dasharray: 2 4; }
+
+  /* which layer is shown */
+  .mirror, .turn { transition: opacity 0.4s var(--ease); }
+  :global(.sy[data-show="0"]) .turn, :global(.sy[data-show="1"]) .mirror { opacity: 0; pointer-events: none; }
+  .mirror .legc, .mirror .legs { opacity: 0; }
+  :global(.sy[data-active]) .mirror .img:not([data-on]) { opacity: 0.18; }
+  .mirror .img[data-on] .legc, .mirror .img[data-on] .legs { opacity: 1; }
+  .mirror .img[data-on] .ilab { fill: var(--paper); }
+  :global(.sy[data-active="5"]) .turn .legs, :global(.sy[data-active="6"]) .turn .legc { opacity: 0.2; }
+  :global(.sy[data-active="5"]) .turn .legc, :global(.sy[data-active="6"]) .turn .legs { stroke-width: 3.5; }
+
+  .handle { cursor: grab; touch-action: none; outline: none; }
+  .handle.is-dragging { cursor: grabbing; }
+  .hit { fill: transparent; }
+  .ringh { fill: none; stroke: var(--paper); stroke-width: 1.25; stroke-dasharray: 2 3; }
+  .handle:hover .ringh, .handle:focus-visible .ringh, .handle.is-dragging .ringh { stroke: var(--cyan); stroke-dasharray: none; }
+
+  .cell { cursor: default; outline: none; transition: opacity 0.3s var(--ease); }
+  .cell rect { fill: color-mix(in srgb, var(--cf) 12%, transparent); stroke: var(--line-2); }
+  .cell[data-fn="all"] { --cf: var(--c-all); } .cell[data-fn="sin"] { --cf: var(--c-sin); }
+  .cell[data-fn="cos"] { --cf: var(--c-cos); } .cell[data-fn="tan"] { --cf: var(--c-tan); }
+  .cell.cur rect { stroke: var(--paper); stroke-width: 1.5; }
+  .qn { fill: var(--dim); font: 500 10px var(--mono); letter-spacing: 0.06em; }
+  .cf { fill: var(--cf); font: italic 400 26px var(--serif); text-anchor: middle; }
+  .ca { fill: var(--cf); opacity: 0.7; font: italic 400 15px var(--serif); text-anchor: middle; }
+  :global(.sy[data-scope]) .cell { opacity: 0.35; }
+  :global(.sy[data-scope="all"]) .cell[data-fn="all"], :global(.sy[data-scope="sin"]) .cell[data-fn="sin"],
+  :global(.sy[data-scope="cos"]) .cell[data-fn="cos"], :global(.sy[data-scope="tan"]) .cell[data-fn="tan"] { opacity: 1; }
+  .cell:focus-visible rect { stroke-dasharray: 3 3; stroke: var(--paper); }
+</style>

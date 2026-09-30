@@ -1,0 +1,157 @@
+---
+// The angle-sum rectangle. The unit diagonal at α+β, split at B into cos β and sin β;
+// every side of the rectangle is then a product of one sine or cosine of α and one of β.
+// Equal angles are marked in pairs: α at A and at B, α+β at A and at D (hover one to
+// light its twin). Drag B to change α, drag D to change β.
+// Rows: 1 sin(α+β), 2 cos(α+β), 3–4 the same with β → −β.
+import Figure from "./Figure.astro";
+import { at, deg } from "./geom";
+import { layout, VB } from "./as";
+
+const L = layout(25 * deg, 30 * deg);
+const vb = `${VB.x} ${VB.y} ${VB.w} ${VB.h}`;
+const SIDES = ["AR", "RB", "BQ", "QD", "ED", "AE"];
+const INNER = ["AB", "BD"];
+const LABELS = ["lAR", "lRB", "lBQ", "lQD", "lED", "lAE", "lAB", "lBD", "lAD"];
+---
+<Figure n="06" title="Rectangle" class="as">
+  <span slot="hud">α <b data-a>25°</b> · β <b data-b>30°</b><span class="neg"> · β → −β</span></span>
+
+  <svg class="plot" viewBox={vb} role="img" aria-label="A rectangle with a unit diagonal at angle alpha plus beta, split into a right triangle with legs cos beta and sin beta. The rectangle's height is sin alpha cos beta plus cos alpha sin beta, which is sin of alpha plus beta; its top is cos alpha cos beta minus sin alpha sin beta, which is cos of alpha plus beta.">
+    <polygon class="tri t-left" data-g="tLeft" {...at(L.tLeft)} />
+    <polygon class="tri t-low" data-g="tLow" {...at(L.tLow)} />
+    <polygon class="tri t-up" data-g="tUp" {...at(L.tUp)} />
+    <polygon class="tri t-mid" data-g="tMid" {...at(L.tMid)} />
+
+    {SIDES.map((s) => <line class="side" data-g={s} data-s={s} {...at(L[s])} />)}
+    {INNER.map((s) => <line class="inner" data-g={s} data-s={s} {...at(L[s])} />)}
+    <line class="diag" data-g="AD" data-s="AD" {...at(L.AD)} />
+    {["rR", "rQ", "rE", "rB"].map((r) => <path class="rm" data-g={r} {...at(L[r])} />)}
+
+    <g class="ang" data-eq="a">
+      <path class="arcA" data-g="aA" {...at(L.aA)} /><path class="arcA" data-g="aB" {...at(L.aB)} />
+      <path class="hitarc" data-g="aA" {...at(L.aA)} /><path class="hitarc" data-g="aB" {...at(L.aB)} />
+      <text class="gl" data-g="laA" {...at(L.laA)}>α</text><text class="gl" data-g="laB" {...at(L.laB)}>α</text>
+    </g>
+    <g class="ang" data-eq="b">
+      <path class="arcB" data-g="bA" {...at(L.bA)} />
+      <path class="hitarc" data-g="bA" {...at(L.bA)} />
+      <text class="gl" data-g="lbA" {...at(L.lbA)}>β</text>
+    </g>
+    <g class="ang" data-eq="ab">
+      <path class="arcAB" data-g="abA" {...at(L.abA)} /><path class="arcAB" data-g="abD" {...at(L.abD)} />
+      <path class="hitarc" data-g="abA" {...at(L.abA)} /><path class="hitarc" data-g="abD" {...at(L.abD)} />
+      <text class="gl ab" data-g="labA" {...at(L.labA)}>α+β</text><text class="gl ab" data-g="labD" {...at(L.labD)}>α+β</text>
+    </g>
+
+    {LABELS.map((l) => <text class="lab" data-g={l} data-l={l} {...at(L[l])}>{L[l].text}</text>)}
+    <text class="pt" x={-14} y={20}>A</text>
+
+    <g class="handle" data-h="B" role="slider" aria-label="Angle alpha" aria-valuemin="5" aria-valuemax="80" aria-valuenow="25">
+      <circle class="hit" r="18" data-g="hB" {...at(L.hB)} /><circle class="ringh" r="8" data-g="hB" {...at(L.hB)} />
+    </g>
+    <g class="handle" data-h="D" role="slider" aria-label="Angle beta" aria-valuemin="5" aria-valuemax="80" aria-valuenow="30">
+      <circle class="hit" r="18" data-g="hD" {...at(L.hD)} /><circle class="ringh" r="8" data-g="hD" {...at(L.hD)} />
+    </g>
+  </svg>
+</Figure>
+
+<script>
+  import { mountGlitch } from "../../scripts/glitch";
+  import { apply, deg, draggable, onSheet } from "./geom";
+  import { layout } from "./as";
+
+  // rows light: the result (hot) and the parts that add up to it (cyan)
+  const ROWS: Record<string, { res: string; parts: string[]; minus?: string; neg?: boolean }> = {
+    "1": { res: "AE", parts: ["RB", "BQ"] },
+    "2": { res: "ED", parts: ["AR"], minus: "QD" },
+    "3": { res: "AE", parts: ["RB", "BQ"], neg: true },
+    "4": { res: "ED", parts: ["AR"], minus: "QD", neg: true },
+  };
+
+  for (const svg of document.querySelectorAll<SVGSVGElement>(".as .plot")) {
+    const fig = svg.closest<HTMLElement>(".as")!;
+    const aOut = fig.querySelector<HTMLElement>("[data-a]")!, bOut = fig.querySelector<HTMLElement>("[data-b]")!;
+    const segs = svg.querySelectorAll<SVGElement>("[data-s], [data-l]");
+    const { burst } = mountGlitch(svg);
+    let a = 25 * deg, b = 30 * deg;
+
+    const draw = () => {
+      apply(svg, layout(a, b));
+      aOut.textContent = `${Math.round(a / deg)}°`; bOut.textContent = `${Math.round(b / deg)}°`;
+      svg.querySelector('[data-h="B"]')!.setAttribute("aria-valuenow", String(Math.round(a / deg)));
+      svg.querySelector('[data-h="D"]')!.setAttribute("aria-valuenow", String(Math.round(b / deg)));
+    };
+    const MIN = 6 * deg, MAX = 84 * deg;
+    const hB = svg.querySelector<SVGGElement>('[data-h="B"]')!, hD = svg.querySelector<SVGGElement>('[data-h="D"]')!;
+    draggable(svg, hB, (p) => { a = Math.max(MIN, Math.min(MAX - b, Math.atan2(-p.y, p.x))); draw(); },
+      (d, big) => { a = Math.max(MIN, Math.min(MAX - b, a + d * (big ? 5 : 1) * deg)); draw(); });
+    draggable(svg, hD, (p) => { b = Math.max(MIN, Math.min(MAX - a, Math.atan2(-p.y, p.x) - a)); draw(); },
+      (d, big) => { b = Math.max(MIN, Math.min(MAX - a, b + d * (big ? 5 : 1) * deg)); draw(); });
+
+    onSheet(fig, (k) => {
+      const r = ROWS[k];
+      if (k) fig.dataset.active = k; else delete fig.dataset.active;
+      fig.toggleAttribute("data-neg", !!r?.neg);
+      segs.forEach((el) => {
+        const s = el.dataset.s ?? el.dataset.l!.slice(1);
+        el.classList.toggle("res", r?.res === s);
+        el.classList.toggle("part", !!r?.parts.includes(s));
+        el.classList.toggle("minus", r?.minus === s);
+      });
+      burst(k ? 100 : 50);
+    });
+
+    for (const g of svg.querySelectorAll<SVGGElement>(".ang")) {
+      g.addEventListener("pointerenter", () => { fig.dataset.eq = g.dataset.eq!; });
+      g.addEventListener("pointerleave", () => { delete fig.dataset.eq; });
+      g.addEventListener("click", () => { if (fig.dataset.eq === g.dataset.eq) delete fig.dataset.eq; else fig.dataset.eq = g.dataset.eq!; });
+    }
+    draw();
+  }
+</script>
+
+<style>
+  .plot { width: 100%; height: auto; display: block; margin-top: 8px; overflow: visible; }
+  .tri { stroke: none; transition: opacity 0.3s var(--ease); }
+  .t-mid { fill: var(--cyan); opacity: 0.16; }
+  .t-low, .t-up { fill: var(--paper); opacity: 0.05; }
+  .t-left { fill: var(--hot); opacity: 0.05; }
+
+  .side { stroke: var(--paper-2); stroke-width: 1.5; transition: stroke 0.3s var(--ease), opacity 0.3s var(--ease); }
+  .inner { stroke: var(--cyan); stroke-width: 1.75; }
+  .diag { stroke: var(--hot); stroke-width: 2.25; }
+  .rm { fill: none; stroke: var(--dim); }
+  .lab { fill: var(--paper-2); font: italic 400 17px var(--serif); transition: fill 0.3s var(--ease), opacity 0.3s var(--ease); }
+  .lab[data-l="lAB"], .lab[data-l="lBD"] { fill: var(--cyan); }
+  .lab[data-l="lAD"] { fill: var(--hot); font-size: 20px; font-style: normal; }
+  .pt { fill: var(--dim); font: 500 11px var(--mono); }
+
+  /* rows: result hot, parts cyan, the subtracted part dashed */
+  :global(.as[data-active]) .side:not(.res):not(.part):not(.minus) { opacity: 0.3; }
+  :global(.as[data-active]) .lab:not(.res):not(.part):not(.minus) { opacity: 0.3; }
+  .side.res { stroke: var(--hot); stroke-width: 3.5; }
+  .side.part { stroke: var(--cyan); stroke-width: 3.5; }
+  .side.minus { stroke: var(--cyan); stroke-width: 3.5; stroke-dasharray: 4 5; }
+  .lab.res { fill: var(--hot); } .lab.part, .lab.minus { fill: var(--cyan); }
+  .neg { display: none; color: var(--hot); }
+  :global(.as[data-neg]) .neg { display: inline; }
+
+  /* equal-angle pairs */
+  .ang { cursor: default; }
+  .hitarc { fill: none; stroke: transparent; stroke-width: 16; }
+  .arcA, .arcB, .arcAB { fill: none; stroke-width: 1.25; transition: stroke-width 0.3s var(--ease), opacity 0.3s var(--ease); }
+  .arcA { stroke: var(--cyan); } .arcB { stroke: var(--paper-2); }
+  .arcAB { stroke: var(--hot); stroke-dasharray: 3 3; }
+  .gl { fill: var(--paper); font: italic 400 16px var(--serif); text-anchor: middle; transition: opacity 0.3s var(--ease); }
+  .gl.ab { fill: var(--hot); font-size: 14px; }
+  :global(.as[data-eq]) .ang { opacity: 0.25; }
+  :global(.as[data-eq="a"]) .ang[data-eq="a"], :global(.as[data-eq="b"]) .ang[data-eq="b"], :global(.as[data-eq="ab"]) .ang[data-eq="ab"] { opacity: 1; }
+  :global(.as[data-eq="a"]) .arcA, :global(.as[data-eq="ab"]) .arcAB, :global(.as[data-eq="b"]) .arcB { stroke-width: 3; stroke-dasharray: none; }
+
+  .handle { cursor: grab; touch-action: none; outline: none; }
+  .handle.is-dragging { cursor: grabbing; }
+  .hit { fill: transparent; }
+  .ringh { fill: var(--ink); stroke: var(--paper); stroke-width: 1.25; stroke-dasharray: 2 3; }
+  .handle:hover .ringh, .handle:focus-visible .ringh, .handle.is-dragging .ringh { stroke: var(--cyan); stroke-dasharray: none; }
+</style>

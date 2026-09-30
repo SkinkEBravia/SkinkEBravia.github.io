@@ -1,0 +1,154 @@
+---
+// Power reduction as a shift. The grey curve is ½cos 2θ, swinging about 0;
+// lift it by ½ and it is cos²θ. Hover sin²θ (or row 2) and the grey curve flips
+// to −½cos 2θ: lift that by ½ and it is sin²θ. Move across the plot to read values.
+import Figure from "./Figure.astro";
+import { f } from "./geom";
+
+const X0 = 52, X1 = 462, Y1 = 42, Y0 = 192; // θ = 0 … 2π ; value 1 at Y1, 0 at Y0
+const sx = (t: number) => X0 + (t / (2 * Math.PI)) * (X1 - X0);
+const sy = (v: number) => Y0 - v * (Y0 - Y1);
+const curve = (fn: (t: number) => number) =>
+  Array.from({ length: 241 }, (_, i) => { const t = (i / 240) * 2 * Math.PI; return `${i ? "L" : "M"}${f(sx(t))} ${f(sy(fn(t)))}`; }).join("");
+const cos2 = curve((t) => Math.cos(t) ** 2), sin2 = curve((t) => Math.sin(t) ** 2);
+const grey = curve((t) => Math.cos(2 * t) / 2);
+const LIFT = [0, 0.5, 1, 1.5, 2].map((k) => k * Math.PI);
+const XT = [["π/2", 0.5], ["π", 1], ["3π/2", 1.5], ["2π", 2]] as const;
+---
+<Figure n="08" title="Shift" class="pr">
+  <span slot="hud" data-readout>½ + ½ cos 2θ</span>
+
+  <svg class="plot" viewBox="0 0 480 290" role="img" aria-label="Graphs over 0 to 2 pi: half cos 2 theta, grey, swinging between minus a half and a half; cos squared theta, the same curve lifted by a half; sin squared theta, the flipped curve lifted by a half.">
+    <line class="gridl" x1={X0} y1={sy(1)} x2={X1} y2={sy(1)} />
+    <line class="mid" x1={X0} y1={sy(0.5)} x2={X1} y2={sy(0.5)} />
+    <line class="axis" x1={X0} y1={sy(0)} x2={X1} y2={sy(0)} />
+    <line class="gridl" x1={X0} y1={sy(-0.5)} x2={X1} y2={sy(-0.5)} />
+    <line class="axis" x1={X0} y1={sy(1.08)} x2={X0} y2={sy(-0.62)} />
+    {[[1, "1"], [0.5, "½"], [0, "0"], [-0.5, "−½"]].map(([v, t]) => <text class="tick" x={X0 - 8} y={sy(+v) + 4} text-anchor="end">{t}</text>)}
+    {XT.map(([t, k]) => <text class="tick" x={sx(k * Math.PI)} y={sy(-0.62) + 16} text-anchor="middle">{t}</text>)}
+
+    <path class="grey" d={grey} data-grey />
+    <g class="lifts">
+      {LIFT.map((t) => <path class="lift" data-t={t} d="" />)}
+      <text class="liftl" data-liftl x={sx(Math.PI / 2) + 7} y={sy(0)}>+½</text>
+    </g>
+    <path class="c cos" data-key="1" d={cos2} />
+    <path class="c sin" data-key="2" d={sin2} />
+    <path class="hitc" data-key="1" d={cos2} />
+    <path class="hitc" data-key="2" d={sin2} />
+
+    <text class="cl cos" x={X1 + 4} y={sy(1) - 8} text-anchor="end">cos²θ</text>
+    <text class="cl sin" x={sx(Math.PI / 2)} y={sy(1) - 8} text-anchor="middle">sin²θ</text>
+    <text class="cl g" data-gl x={sx(1.5 * Math.PI) + 14} y={sy(-0.5) + 2}>½ cos 2θ</text>
+
+    <g class="cursor">
+      <line class="cur" x1="0" y1={sy(1.08)} x2="0" y2={sy(-0.62)} />
+      <circle class="cd cos" r="3.5" /><circle class="cd sin" r="3.5" /><circle class="cd g" r="3" />
+    </g>
+  </svg>
+</Figure>
+
+<script>
+  import { reduce } from "../../scripts/decode";
+  import { mountGlitch } from "../../scripts/glitch";
+  import { onSheet } from "./geom";
+
+  const X0 = 52, X1 = 462, Y1 = 42, Y0 = 192;
+  const sx = (t: number) => X0 + (t / (2 * Math.PI)) * (X1 - X0);
+  const sy = (v: number) => Y0 - v * (Y0 - Y1);
+  const ease = (x: number) => 1 - Math.pow(1 - x, 3);
+
+  for (const svg of document.querySelectorAll<SVGSVGElement>(".pr .plot")) {
+    const fig = svg.closest<HTMLElement>(".pr")!;
+    const readout = fig.querySelector<HTMLElement>("[data-readout]")!;
+    const greyEl = svg.querySelector<SVGPathElement>("[data-grey]")!;
+    const lifts = svg.querySelectorAll<SVGPathElement>(".lift");
+    const liftL = svg.querySelector<SVGTextElement>("[data-liftl]")!;
+    const gl = svg.querySelector<SVGTextElement>("[data-gl]")!;
+    const cur = svg.querySelector<SVGGElement>(".cursor")!;
+    const { burst } = mountGlitch(svg);
+
+    // k = +1: ½cos 2θ ; k = −1: −½cos 2θ
+    let k = 1, target = 1, raf = 0, from = 1, t0 = 0, curT = -1;
+    const draw = () => {
+      let d = "";
+      for (let i = 0; i <= 240; i++) {
+        const t = (i / 240) * 2 * Math.PI;
+        d += `${i ? "L" : "M"}${sx(t).toFixed(1)} ${sy((k * Math.cos(2 * t)) / 2).toFixed(1)}`;
+      }
+      greyEl.setAttribute("d", d);
+      lifts.forEach((p) => {
+        const t = +p.dataset.t!, g = (k * Math.cos(2 * t)) / 2, x = sx(t).toFixed(1);
+        const y0 = sy(g) - 3, y1 = sy(g + 0.5) + 6;
+        p.setAttribute("d", `M${x} ${y0.toFixed(1)} V${y1.toFixed(1)} M${(+x - 4).toFixed(1)} ${(y1 + 5).toFixed(1)} L${x} ${y1.toFixed(1)} L${(+x + 4).toFixed(1)} ${(y1 + 5).toFixed(1)}`);
+      });
+      liftL.setAttribute("y", sy((k * Math.cos(Math.PI)) / 2 + 0.25).toFixed(1));
+      gl.textContent = k > 0 ? "½ cos 2θ" : "−½ cos 2θ";
+      if (curT < 0) readout.textContent = target > 0 ? "½ + ½ cos 2θ" : "½ − ½ cos 2θ";
+      if (curT >= 0) cursorAt(curT);
+    };
+    const go = (to: number) => {
+      if (to === target) return;
+      target = to; from = k; t0 = performance.now();
+      burst(110);
+      if (reduce) { k = to; draw(); return; }
+      if (!raf) raf = requestAnimationFrame(function step(now) {
+        const p = Math.min(1, (now - t0) / 650);
+        k = from + (target - from) * ease(p); draw();
+        raf = p < 1 ? requestAnimationFrame(step) : 0;
+      });
+    };
+    const cursorAt = (t: number) => {
+      const c = Math.cos(t) ** 2, s = Math.sin(t) ** 2, g = (k * Math.cos(2 * t)) / 2, x = sx(t);
+      cur.querySelector("line")!.setAttribute("x1", x.toFixed(1)); cur.querySelector("line")!.setAttribute("x2", x.toFixed(1));
+      const [dc, ds, dg] = cur.querySelectorAll("circle");
+      dc.setAttribute("cx", x.toFixed(1)); dc.setAttribute("cy", sy(c).toFixed(1));
+      ds.setAttribute("cx", x.toFixed(1)); ds.setAttribute("cy", sy(s).toFixed(1));
+      dg.setAttribute("cx", x.toFixed(1)); dg.setAttribute("cy", sy(g).toFixed(1));
+      readout.innerHTML = `θ <b>${Math.round((t * 180) / Math.PI)}°</b> · cos² <b>${c.toFixed(2)}</b> · sin² <b>${s.toFixed(2)}</b>`;
+    };
+
+    onSheet(fig, (key) => {
+      if (key) fig.dataset.active = key; else delete fig.dataset.active;
+      go(key === "2" ? -1 : 1);
+    });
+    svg.addEventListener("pointermove", (e) => {
+      const m = svg.getScreenCTM(); if (!m) return;
+      const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse());
+      if (p.x < X0 || p.x > X1 || p.y < sy(1.1) || p.y > sy(-0.62)) { hide(); return; }
+      curT = ((p.x - X0) / (X1 - X0)) * 2 * Math.PI;
+      fig.dataset.cursor = ""; cursorAt(curT);
+    });
+    const hide = () => { if (curT < 0) return; curT = -1; delete fig.dataset.cursor; draw(); };
+    svg.addEventListener("pointerleave", hide);
+    draw();
+  }
+</script>
+
+<style>
+  .plot { width: 100%; height: auto; display: block; margin-top: 8px; overflow: visible; }
+  .axis { stroke: var(--line-2); }
+  .gridl { stroke: var(--line); stroke-dasharray: 2 5; }
+  .mid { stroke: var(--paper-2); stroke-opacity: 0.5; stroke-dasharray: 5 5; }
+  .tick { fill: var(--dim); font: 500 11px var(--mono); }
+
+  .grey { fill: none; stroke: var(--paper-2); stroke-opacity: 0.7; stroke-width: 1.5; stroke-dasharray: 4 3; }
+  .lift { fill: none; stroke: var(--paper-2); stroke-width: 1.1; opacity: 0.55; }
+  .liftl { fill: var(--paper-2); font: italic 400 16px var(--serif); }
+  .c { fill: none; stroke-linecap: round; transition: opacity 0.35s var(--ease), stroke-width 0.35s var(--ease); pointer-events: none; }
+  .c.cos { stroke: var(--cyan); stroke-width: 3; }
+  .c.sin { stroke: var(--hot); stroke-width: 1.75; }
+  .hitc { fill: none; stroke: transparent; stroke-width: 16; cursor: default; }
+  .cl { font: italic 400 17px var(--serif); transition: opacity 0.35s var(--ease); }
+  .cl.cos { fill: var(--cyan); } .cl.sin { fill: var(--hot); } .cl.g { fill: var(--paper-2); }
+
+  :global(.pr[data-active="1"]) .sin { opacity: 0.18; }
+  :global(.pr[data-active="2"]) .cos { opacity: 0.18; }
+  :global(.pr[data-active="2"]) .c.sin { stroke-width: 3; }
+  :global(.pr[data-active]) .lift { opacity: 1; }
+
+  .cursor { opacity: 0; transition: opacity 0.2s var(--ease); pointer-events: none; }
+  :global(.pr[data-cursor]) .cursor { opacity: 1; }
+  .cur { stroke: var(--line-2); }
+  .cd.cos { fill: var(--cyan); } .cd.sin { fill: var(--hot); } .cd.g { fill: var(--paper-2); }
+</style>
