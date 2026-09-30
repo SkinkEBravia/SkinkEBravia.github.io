@@ -1,0 +1,27 @@
+---
+title: "Trigonometry"
+description: "A cheat sheet for reciting. Each family of formulas gets one picture."
+date: 2026-09-30
+topic: "Trigonometry"
+---
+import Sheet from "../../components/sheet/Sheet.astro";
+import PythagoreanHexagon from "../../components/sheet/PythagoreanHexagon.astro";
+
+{/*
+  One section per family of identities: a heading, at most a line or two of text,
+  then a <Sheet> holding the figure and a numbered list of formulas.
+  List item n lights up the figure elements marked data-key="n".
+*/}
+
+## Pythagorean Identities
+
+Every shaded triangle is one identity.
+
+<Sheet>
+<PythagoreanHexagon />
+
+1. $\sin^2\theta + \cos^2\theta = 1$
+2. $\tan^2\theta + 1 = \sec^2\theta$
+3. $1 + \cot^2\theta = \csc^2\theta$
+
+</Sheet>

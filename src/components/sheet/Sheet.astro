@@ -1,0 +1,97 @@
+---
+// One block of a cheat sheet: a figure next to a numbered list of formulas.
+// In MDX, put the figure component first, then a plain Markdown list:
+//
+//   <Sheet>
+//   <SomeFigure />
+//
+//   1. $formula one$
+//   2. $formula two$
+//
+//   </Sheet>
+//
+// List item n is linked to every element in the figure marked data-key="n":
+// hovering or focusing either lights both. The figure hears about it through
+// a "sheet:active" event on the sheet (detail is the key, or "" when calm).
+---
+<section class="sheet" data-sheet>
+  <slot />
+</section>
+
+<style>
+  .sheet {
+    max-width: min(100%, 1120px) !important;
+    display: grid;
+    gap: clamp(28px, 4vw, 48px);
+    margin-top: 2em !important;
+    align-items: center;
+  }
+  @media (min-width: 1180px) {
+    .sheet { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); }
+  }
+
+  .sheet > :global(ol) {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    counter-reset: id;
+    border-top: 1px solid var(--line-2);
+  }
+  .sheet > :global(ol > li) {
+    counter-increment: id;
+    display: grid;
+    grid-template-columns: 3.4em 1fr;
+    align-items: center;
+    margin: 0;
+    padding: 1.05em 0;
+    border-bottom: 1px solid var(--line);
+    outline-offset: -1px;
+    cursor: default;
+    transition: opacity 0.5s var(--ease);
+  }
+  .sheet > :global(ol > li::before) {
+    content: "(" counter(id, decimal-leading-zero) ")";
+    font: 500 11px/1 var(--mono);
+    letter-spacing: 0.08em;
+    color: var(--dim);
+    transition: color 0.3s var(--ease);
+  }
+  .sheet > :global(ol > li .katex) {
+    font-size: clamp(22px, 2.3vw, 30px);
+    color: var(--paper-2);
+    white-space: nowrap;
+    transition: color 0.3s var(--ease);
+  }
+  .sheet[data-active] > :global(ol > li:not([data-on])) { opacity: 0.35; }
+  .sheet > :global(ol > li[data-on] .katex) { color: var(--paper); }
+  .sheet > :global(ol > li[data-on]::before) { color: var(--hot); }
+</style>
+
+<script>
+  for (const sheet of document.querySelectorAll<HTMLElement>("[data-sheet]")) {
+    const rows = sheet.querySelectorAll<HTMLElement>(":scope > ol > li");
+    rows.forEach((li, i) => { li.dataset.key = String(i + 1); li.tabIndex = 0; });
+
+    let active = "";
+    const set = (k: string) => {
+      if (k === active) return;
+      active = k;
+      if (k) sheet.dataset.active = k; else delete sheet.dataset.active;
+      for (const el of sheet.querySelectorAll<Element>("[data-key]")) {
+        el.toggleAttribute("data-on", (el as HTMLElement).dataset.key === k);
+      }
+      sheet.dispatchEvent(new CustomEvent("sheet:active", { detail: k }));
+    };
+    const keyOf = (t: EventTarget | null) =>
+      (t as Element | null)?.closest?.<HTMLElement>("[data-key]")?.dataset.key ?? "";
+
+    // mouse and pen: hover; touch: tap to toggle, tap elsewhere to clear
+    let touch = false;
+    addEventListener("pointerdown", (e) => { touch = e.pointerType === "touch"; if (touch && !sheet.contains(e.target as Node)) set(""); }, true);
+    sheet.addEventListener("pointerover", (e) => { if (e.pointerType !== "touch") { const k = keyOf(e.target); if (k) set(k); } });
+    sheet.addEventListener("pointerleave", (e) => { if (e.pointerType !== "touch") set(""); });
+    sheet.addEventListener("click", (e) => { if (touch) { const k = keyOf(e.target); set(k === active ? "" : k); } });
+    sheet.addEventListener("focusin", (e) => { if (!touch) set(keyOf(e.target)); });
+    sheet.addEventListener("focusout", (e) => { if (!sheet.contains(e.relatedTarget as Node)) set(""); });
+  }
+</script>
