@@ -1,0 +1,182 @@
+---
+import type { MetricTable, MetricColumn, MetricRow } from "../resume";
+interface Props { table: MetricTable }
+const { table } = Astro.props;
+const format = (row: MetricRow, col: MetricColumn) =>
+  col.key === "fixed" ? `${row.fixed.toFixed(1)}%` :
+  col.key === "broken" ? `${row.broken.toFixed(2)}%` : row[col.key].toFixed(4);
+const isBest = (rows: MetricRow[], row: MetricRow, col: MetricColumn) =>
+  row[col.key] === (col.higher ? Math.max : Math.min)(...rows.map((r) => r[col.key]));
+---
+<figure class="experiments" data-experiment-tabs>
+  <div class="intro">
+    <h4 class="serif">Experimental results</h4>
+    <p class="label">Eight interfaces · Two model versions</p>
+  </div>
+  <div class="model-tabs" role="tablist" aria-label="OCR experiment model version" hidden>
+    {table.batches.map((batch, index) => (
+      <button type="button" role="tab" id={`ocr-tab-${batch.id}`} aria-controls={`ocr-panel-${batch.id}`}
+        aria-selected={index === 0 ? "true" : "false"} tabindex={index === 0 ? 0 : -1}>
+        {batch.model}
+      </button>
+    ))}
+  </div>
+  {table.batches.map((batch) => (
+    <section class="model-panel" id={`ocr-panel-${batch.id}`} data-model-panel data-sort-table>
+      <div class="batch-meta">
+        <p class="label">{batch.model} · {batch.date}</p>
+        <p class="hint">Select a metric to sort. Best values are underlined.</p>
+      </div>
+      <div class="frame" role="region" aria-label={`${batch.model} full results, scroll horizontally on narrow screens`} tabindex="0">
+        <table>
+          <caption class="sr-only">{batch.model}: all eight editing interfaces on 33 paired tasks. cMER is lower-is-better; fixed is higher-is-better; broken is lower-is-better.</caption>
+          <thead>
+            <tr>
+              <th scope="col">Edit interface</th>
+              {table.columns.map((col) => (
+                <th scope="col" class="num" aria-sort="none">
+                  <button type="button" class="sort" data-sort={col.key} data-higher={col.higher ? "true" : "false"} aria-pressed="false">
+                    {col.label} <span class="arr" aria-hidden="true">{col.higher ? "↑" : "↓"}</span>
+                    <span class="sr-only">, {col.higher ? "higher" : "lower"} is better</span>
+                  </button>
+                </th>
+              ))}
+              <th scope="col" class="num">Edit spans</th>
+              <th scope="col" class="num">Output tokens</th>
+              <th scope="col">Runs</th>
+            </tr>
+          </thead>
+          <tbody>
+            {batch.rows.map((row, index) => (
+              <tr data-order={index}>
+                <th scope="row"><span>{row.edit}</span><span class="arm">{row.arm}</span></th>
+                {table.columns.map((col) => (
+                  <td class:list={["num", { "is-best": isBest(batch.rows, row, col) }]}
+                    data-metric={col.key} data-value={row[col.key]}>{format(row, col)}</td>
+                ))}
+                <td class="num">{row.spans.toFixed(1)}</td>
+                <td class="num tokens">{row.tokens}</td>
+                <td class="status">{row.status}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p class="batch-note">{batch.note}</p>
+    </section>
+  ))}
+  <figcaption>
+    <p><span class="label">Setup</span>{table.setup}</p>
+    <p><span class="label">Observation</span>{table.observation}</p>
+    <p><span class="label">Reading the results</span>{table.limitation}</p>
+  </figcaption>
+</figure>
+<script>
+  function initExperimentTables() {
+    for (const root of document.querySelectorAll<HTMLElement>("[data-experiment-tabs]")) {
+      if (root.dataset.ready) continue;
+      root.dataset.ready = "true";
+      const tablist = root.querySelector<HTMLElement>('[role="tablist"]');
+      const tabs = [...root.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+      const panels = [...root.querySelectorAll<HTMLElement>("[data-model-panel]")];
+      const select = (index: number, focus = false) => {
+        tabs.forEach((tab, i) => {
+          tab.setAttribute("aria-selected", String(i === index));
+          tab.tabIndex = i === index ? 0 : -1;
+        });
+        panels.forEach((panel, i) => { panel.hidden = i !== index; });
+        if (focus) tabs[index].focus();
+      };
+      tabs.forEach((tab, index) => {
+        tab.addEventListener("click", () => select(index));
+        tab.addEventListener("keydown", (event) => {
+          let next: number;
+          switch (event.key) {
+            case "ArrowRight": next = (index + 1) % tabs.length; break;
+            case "ArrowLeft": next = (index + tabs.length - 1) % tabs.length; break;
+            case "Home": next = 0; break;
+            case "End": next = tabs.length - 1; break;
+            default: return;
+          }
+          event.preventDefault();
+          select(next, true);
+        });
+      });
+      panels.forEach((panel, i) => {
+        panel.setAttribute("role", "tabpanel");
+        panel.setAttribute("aria-labelledby", tabs[i].id);
+        panel.tabIndex = 0;
+        const body = panel.querySelector("tbody");
+        const buttons = [...panel.querySelectorAll<HTMLButtonElement>("[data-sort]")];
+        if (!body) return;
+        buttons.forEach((button) => {
+          button.addEventListener("click", () => {
+            const key = button.dataset.sort;
+            const higher = button.dataset.higher === "true";
+            const value = (row: HTMLTableRowElement) => Number(row.querySelector<HTMLElement>(`[data-metric="${key}"]`)?.dataset.value);
+            [...body.querySelectorAll<HTMLTableRowElement>("tr")]
+              .sort((a, b) => (value(a) - value(b)) * (higher ? -1 : 1) || Number(a.dataset.order) - Number(b.dataset.order))
+              .forEach((row) => body.appendChild(row));
+            buttons.forEach((other) => {
+              const active = other === button;
+              other.setAttribute("aria-pressed", String(active));
+              other.closest("th")?.setAttribute("aria-sort", active ? (higher ? "descending" : "ascending") : "none");
+            });
+          });
+        });
+      });
+      select(0);
+      if (tablist) tablist.hidden = false;
+    }
+  }
+  initExperimentTables();
+  document.addEventListener("astro:page-load", initExperimentTables);
+</script>
+<style>
+  .experiments { grid-column: 1 / -1; min-width: 0; margin: 28px 0 0; display: grid; gap: 22px; }
+  .intro { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; }
+  h4 { margin: 0; font-size: clamp(28px, 3vw, 40px); line-height: 1.15; letter-spacing: -0.02em; }
+  p { margin: 0; }
+  [hidden] { display: none !important; }
+  .model-tabs { display: flex; flex-wrap: wrap; gap: 8px; border-bottom: 1px solid var(--line-2); padding-bottom: 14px; }
+  [role="tab"] { padding: 12px 16px; border: 1px solid var(--line-2); color: var(--paper-2); font: 500 12px/1.4 var(--mono); }
+  [role="tab"]:hover { color: var(--paper); border-color: var(--paper-2); }
+  [role="tab"][aria-selected="true"] { color: var(--paper); background: var(--ink-3); border-bottom-color: var(--hot); }
+  .model-panel { min-width: 0; display: grid; gap: 14px; }
+  .batch-meta { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; }
+  .hint { color: var(--dim); font-size: 12px; }
+  .frame { min-width: 0; max-width: 100%; overflow-x: auto; border-top: 1px solid var(--line-2); scrollbar-color: var(--line-2) var(--ink-2); }
+  table { width: 100%; min-width: 1080px; border-collapse: collapse; }
+  th, td { padding: 16px 14px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; font-weight: 400; }
+  th:first-child { padding-left: 0; }
+  th:last-child, td:last-child { padding-right: 0; }
+  thead th { color: var(--dim); font: 500 10px/1.5 var(--mono); letter-spacing: 0.04em; white-space: nowrap; }
+  tbody th { min-width: 230px; color: var(--paper); font-size: 14px; line-height: 1.45; }
+  .arm { display: block; margin-top: 4px; color: var(--dim); font: 400 10px/1.5 var(--mono); }
+  td { color: var(--paper-2); }
+  .num { text-align: right; white-space: nowrap; }
+  td.num { font: 500 12px/1.5 var(--mono); font-variant-numeric: tabular-nums; }
+  td.is-best { color: var(--paper); text-decoration: underline; text-decoration-color: var(--hot); text-underline-offset: 6px; }
+  .tokens, .status { font-size: 11px; }
+  .status { font: 400 11px/1.5 var(--mono); white-space: nowrap; }
+  .sort { display: inline-flex; align-items: baseline; justify-content: flex-end; gap: 5px; min-height: 32px; color: inherit; border-bottom: 1px solid transparent; }
+  .sort:hover { color: var(--paper); }
+  .sort[aria-pressed="true"] { color: var(--paper); border-bottom-color: var(--hot); }
+  .arr { color: var(--dim); }
+  .sort[aria-pressed="true"] .arr { color: var(--hot); }
+  .batch-note { max-width: 95ch; color: var(--dim); font-size: 12px; line-height: 1.65; }
+  figcaption { display: grid; gap: 18px; max-width: 78ch; padding-top: 6px; }
+  figcaption p { color: var(--paper-2); font-size: 15px; line-height: 1.7; }
+  figcaption .label { display: block; margin-bottom: 6px; }
+  @media (max-width: 700px) {
+    .experiments { gap: 18px; }
+    .intro { display: grid; }
+    .model-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    [role="tab"] { font-size: 11px; padding: 12px 10px; text-align: left; }
+    .hint::after { content: " Swipe the table to see all columns."; }
+    table { min-width: 1080px; }
+    tbody th { position: sticky; left: 0; background: var(--ink); min-width: 185px; max-width: 185px; padding-right: 12px; }
+    .arm { overflow-wrap: anywhere; }
+    figcaption p { font-size: 14px; }
+  }
+</style>

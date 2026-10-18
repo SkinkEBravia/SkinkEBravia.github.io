@@ -1,5 +1,6 @@
 ---
 import { hues } from "../lib";
+import { site } from "../site";
 export interface Row {
   href: string; slug: string; title: string; meta: string; aside: string; kind: string; cover?: string;
 }
@@ -14,10 +15,19 @@ const { rows, empty = "Forthcoming." } = Astro.props;
       const [h1, h2] = hues(r.slug);
       return (
         <li data-reveal style={`transition-delay:${Math.min(i, 6) * 60}ms`}>
-          <a href={r.href} data-row data-h1={h1} data-h2={h2} data-cover={r.cover} data-kind={r.kind}>
+          <a
+            href={r.href}
+            data-row
+            data-h1={h1}
+            data-h2={h2}
+            data-cover={r.cover}
+            data-kind={r.kind}
+            target={/^https?:\/\//i.test(r.href) || r.href.endsWith(".pdf") ? "_blank" : undefined}
+            rel={/^https?:\/\//i.test(r.href) || r.href.endsWith(".pdf") ? "noopener" : undefined}
+          >
             <span class="idx label">{String(i + 1).padStart(3, "0")}</span>
             <span class="title" data-decode>{r.title}</span>
-            <span class="meta label">{r.meta}</span>
+            <span class="meta label">{r.meta === site.name ? <span class="name-case">{r.meta}</span> : r.meta}</span>
             <span class="aside label">{r.aside}</span>
             <span class="go" aria-hidden="true">↗</span>
           </a>

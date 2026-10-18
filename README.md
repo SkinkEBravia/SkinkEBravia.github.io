@@ -1,6 +1,6 @@
 # SkinkEBravia.github.io
 
-Personal site: research, writing and study notes on computer graphics.
+Personal site: research, experiments and notes on agent interfaces, flow matching, and AI for computer graphics.
 Live at **https://skinkebravia.github.io**.
 
 The hero is **SIGNAL**, raymarched live in WebGL2: a gyroid lattice in thin-film chrome that
@@ -13,7 +13,7 @@ Testing: `/?form=gyroid` or `/?form=0`…`3` freezes a form; `/?at=5` jumps into
 
 | What | Where | Notes |
 |---|---|---|
-| Paper / project page | `src/content/research/*.md(x)` | Copy `example-paper.md`. `selected: true` puts it on the home page. |
+| Paper / project page | `src/content/research/*.md(x)` | Use YAML front matter for title, authors, venue, year and abstract. `selected: true` puts it on the home page. |
 | Essay / blog post | `src/content/writing/*.md(x)` | |
 | Study note | `src/content/notes/*.md(x)` | |
 | Name, tagline, statement, links | `src/site.ts` | Empty links are hidden. |

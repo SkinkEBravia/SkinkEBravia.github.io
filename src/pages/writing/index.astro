@@ -7,7 +7,7 @@ import { entries, writingRows } from "../../lib";
 const list = await entries("writing");
 ---
 <Base title="Writing" description="Essays and long-form writing on graphics.">
-  <PageHead n="02" title="Writing" lede="Essays and long-form writing on graphics." count={list.length} />
+  <PageHead n="03" title="Writing" lede="Essays and long-form writing on graphics." count={list.length} />
   <section class="wrap"><EntryList rows={writingRows(list)} empty="Forthcoming." /></section>
   <Preview />
 </Base>

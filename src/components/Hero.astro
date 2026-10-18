@@ -6,7 +6,7 @@ import { site } from "../site";
   <div class="fallback" aria-hidden="true"></div>
 
   <div class="hud hud-top label">
-    <span>Computer graphics<br />Rendering<br />Visual effects</span>
+    <span>{site.interests.map((interest, index) => <>{index > 0 && <br />}{interest}</>)}</span>
     <span class="r">Signal <b data-fps>—</b> fps<br />Seed <b data-seed>0x000000</b><br /><b data-state>Nominal</b><br />Form <b data-form>Gyroid</b></span>
   </div>
 

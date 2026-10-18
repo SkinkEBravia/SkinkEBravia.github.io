@@ -6,12 +6,13 @@ import SectionHead from "../components/SectionHead.astro";
 import EntryList from "../components/EntryList.astro";
 import Preview from "../components/Preview.astro";
 import { site } from "../site";
-import { entries, researchRows, writingRows, noteRows } from "../lib";
+import { entries, researchRows, writingRows, noteRows, resourceRows } from "../lib";
 
 const research = await entries("research");
 const selected = research.filter((r) => r.data.selected);
 const writing = await entries("writing");
 const notes = await entries("notes");
+const resources = resourceRows();
 ---
 <Base>
   <Hero />
@@ -24,20 +25,25 @@ const notes = await entries("notes");
     </ul>
   </section>
 
-  <Marquee words={["Computer graphics", "rendering", "Light transport", "visual effects", "Real-time", "simulation"]} />
+  <Marquee words={site.interests} />
 
   <section class="wrap block">
-    <SectionHead n="01" title="Research" href="/research/" count={research.length} />
+    <SectionHead n="01" title="About" href="/about/" count={resources.length} />
+    <EntryList rows={resources} empty="No documents yet." />
+  </section>
+
+  <section class="wrap block">
+    <SectionHead n="02" title="Research" href="/research/" count={research.length} />
     <EntryList rows={researchRows(selected.length ? selected : research.slice(0, 5))} empty="Papers forthcoming. Signal pending." />
   </section>
 
   <section class="wrap block">
-    <SectionHead n="02" title="Writing" href="/writing/" count={writing.length} />
+    <SectionHead n="03" title="Writing" href="/writing/" count={writing.length} />
     <EntryList rows={writingRows(writing.slice(0, 5))} />
   </section>
 
   <section class="wrap block">
-    <SectionHead n="03" title="Notes" href="/notes/" count={notes.length} />
+    <SectionHead n="04" title="Notes" href="/notes/" count={notes.length} />
     <EntryList rows={noteRows(notes.slice(0, 6))} />
   </section>
 

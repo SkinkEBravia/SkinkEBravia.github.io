@@ -1,19 +1,22 @@
 // Everything personal lives here. Edit freely; empty links are hidden.
 export const site = {
   name: "SkinkEBravia",
-  title: "SkinkEBravia — computer graphics",
-  description: "Research, writing and study notes on computer graphics, rendering and visual effects.",
+  title: "Yifan Zhang — SkinkEBravia",
+  description: "Yifan Zhang’s research, experiments and notes on agent interfaces, flow matching, and AI for computer graphics.",
   // Hero line under the name.
-  tagline: "Pictures made from math, and what happens when the math breaks.",
+  tagline: "Agent interfaces. Flow matching. AI for computer graphics.",
   // Opening statement on the home page. Replace with your own voice.
   statement:
-    "I study computer graphics: how light, geometry and motion become pictures. This is where my papers, experiments and notes live.",
-  interests: ["Rendering", "Light transport", "Real-time graphics", "Simulation", "Visual effects"],
+    "In the wake of AI, the embers of human logic fade.",
+  interests: ["AGENT", "Flow Matching", "AI4CG"],
+  /** HTML resume. Listed first under About → Resources. */
+  resume: "/about/resume/",
   links: {
     github: "https://github.com/SkinkEBravia",
     scholar: "",
     email: "",
     x: "",
-    cv: "",
+    /** Original PDF. The HTML page is `resume` above. */
+    cv: "/resume/yifan-zhang.pdf",
   },
 };

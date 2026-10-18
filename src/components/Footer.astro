@@ -2,6 +2,12 @@
 import { site } from "../site";
 const links = Object.entries(site.links).filter(([, v]) => v);
 const year = new Date().getFullYear();
+const label = (k: string) => {
+  if (k === "x") return "X";
+  if (k === "cv") return "CV";
+  if (k === "github") return "GitHub";
+  return k[0].toUpperCase() + k.slice(1);
+};
 ---
 <footer class="foot">
   <div class="wrap top">
@@ -11,7 +17,7 @@ const year = new Date().getFullYear();
     </div>
     <ul class="links">
       {links.map(([k, v]) => (
-        <li><a class="ulink" href={k === "email" ? `mailto:${v}` : v} target={k === "email" ? undefined : "_blank"} rel="noopener"><span class="label">↗</span> {k === "x" ? "X" : k[0].toUpperCase() + k.slice(1)}</a></li>
+        <li><a class="ulink" href={k === "email" ? `mailto:${v}` : v} target={k === "email" ? undefined : "_blank"} rel="noopener"><span class="label">↗</span> {label(k)}</a></li>
       ))}
     </ul>
   </div>

@@ -1,4 +1,5 @@
 import { getCollection, type CollectionEntry } from "astro:content";
+import { site } from "./site";
 
 type Key = "research" | "writing" | "notes";
 
@@ -49,3 +50,33 @@ export const noteRows = (es: CollectionEntry<"notes">[]): Row[] =>
     href: `/notes/${e.id}/`, slug: e.id, title: e.data.title,
     meta: e.data.topic, aside: fmtDate(e.data.date), kind: "Note",
   }));
+
+const linkTitle = (key: string) => {
+  if (key === "x") return "X";
+  if (key === "cv") return "CV";
+  if (key === "github") return "GitHub";
+  return key[0].toUpperCase() + key.slice(1);
+};
+
+/** About resources. The resume page is always first; filled `site.links` follow. */
+export const resourceRows = (): Row[] => {
+  const head: Row = {
+    href: site.resume,
+    slug: "resume",
+    title: "Resume",
+    meta: "Yifan Zhang",
+    aside: "OCT 2026",
+    kind: "Resume",
+  };
+  const rest: Row[] = Object.entries(site.links)
+    .filter(([, href]) => href && href !== site.resume)
+    .map(([key, href]) => ({
+      href: key === "email" ? `mailto:${href}` : href,
+      slug: key,
+      title: linkTitle(key),
+      meta: key === "cv" ? "PDF" : key === "github" ? "SkinkEBravia" : key === "email" ? href : "External",
+      aside: key === "cv" ? "FILE" : "",
+      kind: key === "cv" ? "PDF" : linkTitle(key),
+    }));
+  return [head, ...rest];
+};

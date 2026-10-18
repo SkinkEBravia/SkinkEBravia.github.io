@@ -23,6 +23,7 @@ const research = defineCollection({
         })
         .default({}),
       bibtex: z.string().optional(),
+      experimentResults: z.enum(["ocr-fix"]).optional(),
       selected: z.boolean().default(false),
       draft: z.boolean().default(false),
     }),
