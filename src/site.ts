@@ -1,4 +1,7 @@
 // Everything personal lives here. Edit freely; empty links are hidden.
+const cv = "/resume/yifan-zhang.pdf";
+const transcript = "/resume/transcript-yifan-zhang.pdf";
+
 export const site = {
   name: "SkinkEBravia",
   title: "Yifan Zhang — SkinkEBravia",
@@ -17,6 +20,11 @@ export const site = {
     email: "",
     x: "",
     /** Original PDF. The HTML page is `resume` above. */
-    cv: "/resume/yifan-zhang.pdf",
+    cv,
   },
+  /** PDFs offered as buttons at the top of the resume page. */
+  documents: [
+    { label: "CV", href: cv },
+    { label: "Transcript", href: transcript },
+  ],
 };

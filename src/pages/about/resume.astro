@@ -21,17 +21,21 @@ const groups: { n: string; title: string; entries: ResumeEntry[] }[] = [
         <span>Lanzhou University</span>
         <span>Gansu, China</span>
         <span>{resume.education.when}</span>
-        <span>GPA 88.1/100</span>
+        <span>GPA {resume.education.gpa} · Rank {resume.education.rank}</span>
       </p>
       <nav class="links" aria-label="Resume links">
-        {site.links.cv && <a class="pill" href={site.links.cv} target="_blank" rel="noopener">PDF ↗</a>}
+        {site.documents.map((doc) => (
+          <a class="pill" href={doc.href} target="_blank" rel="noopener">{doc.label} PDF ↗</a>
+        ))}
         <a class="pill" href={resume.publication.href} target="_blank" rel="noopener">Publication ↗</a>
-        <a class="pill" href={`mailto:${resume.email}`}>Email ↗</a>
       </nav>
       <p class="contact">
         <a class="ulink" href={resume.phoneHref}>{resume.phone}</a>
-        <span aria-hidden="true">·</span>
-        <a class="ulink" href={`mailto:${resume.email}`}>{resume.email}</a>
+        {resume.emails.map((mail) => (
+          <a class="ulink mail" href={`mailto:${mail}`}>
+            <span class="sep" aria-hidden="true">·</span>{mail}
+          </a>
+        ))}
       </p>
     </header>
 
@@ -41,6 +45,7 @@ const groups: { n: string; title: string; entries: ResumeEntry[] }[] = [
         <h3 class="serif">{resume.education.title}</h3>
         <p class="when label">{resume.education.when}</p>
         {resume.education.context.map((line) => <p class="context">{line}</p>)}
+        <p class="context">Cumulative GPA {resume.education.gpa} · Rank {resume.education.rank} (same year, same major)</p>
         <p class="interest"><span class="label">Research interest</span> {resume.education.interest}</p>
       </article>
     </section>
@@ -110,6 +115,7 @@ const groups: { n: string; title: string; entries: ResumeEntry[] }[] = [
   .meta span { white-space: nowrap; flex: none; }
   .links { display: flex; flex-wrap: wrap; gap: 10px; }
   .contact { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 0; color: var(--paper-2); }
+  .mail { display: inline-flex; gap: 8px; align-items: baseline; }
   .group { display: grid; gap: 22px; }
   h2 {
     margin: 0; display: flex; align-items: baseline; gap: 14px;
@@ -148,5 +154,7 @@ const groups: { n: string; title: string; entries: ResumeEntry[] }[] = [
     .item, .honors li, .skills div { grid-template-columns: minmax(0, 1fr); }
     .when { grid-column: 1; grid-row: auto; text-align: left; margin-top: 0; }
     .meta { display: grid; gap: 8px; }
+    .contact { display: grid; gap: 6px; }
+    .sep { display: none; }
   }
 </style>

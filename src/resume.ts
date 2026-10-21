@@ -51,12 +51,15 @@ export const resume = {
   name: "Yifan Zhang",
   phone: "+86 17721379323",
   phoneHref: "tel:+8617721379323",
-  email: "yifanz2027@126.com",
+  emails: ["yfzh2023@lzu.edu.cn", "2476230107qq@gmail.com", "yifanz2027@126.com"],
   updated: "Oct 2026",
   education: {
     title: "Lanzhou University",
     when: "Aug. 2023 – Jul. 2027",
-    context: ["Gansu, China", "Bachelor of Engineering", "Major: Artificial Intelligence", "Cumulative GPA: 88.1/100"],
+    gpa: "88.1/100",
+    /** GPA rank among the same year and the same major. */
+    rank: "7/35",
+    context: ["Gansu, China", "Bachelor of Engineering", "Major: Artificial Intelligence"],
     interest:
       "LLM agents, tool-use interfaces, controllable content editing; applications in AIGC, computer graphics, and 3D computer vision.",
   },
