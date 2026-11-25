@@ -53,4 +53,35 @@ const notes = defineCollection({
   }),
 });
 
-export const collections = { research, writing, notes };
+const reading = defineCollection({
+  loader: glob({ pattern: "**/[^_]*.{md,mdx}", base: "./src/content/reading" }),
+  schema: z.object({
+    title: z.string(),
+    authors: z.array(z.string()),
+    shortAuthors: z.string(),
+    venue: z.string(),
+    year: z.number(),
+    arxivId: z.string().optional(),
+    submitted: z.string().optional(),
+    revised: z.string().optional(),
+    license: z.string(),
+    licenseUrl: z.string(),
+    topic: z.string(),
+    abstract: z.string(),
+    dateAdded: z.coerce.date(),
+    readerPath: z.string().optional(),
+    links: z
+      .object({
+        arxiv: z.string().optional(),
+        pdf: z.string().optional(),
+        html: z.string().optional(),
+        website: z.string().optional(),
+      })
+      .default({}),
+    bibtex: z.string(),
+    buildNote: z.string().optional(),
+    draft: z.boolean().default(false),
+  }),
+});
+
+export const collections = { research, writing, notes, reading };

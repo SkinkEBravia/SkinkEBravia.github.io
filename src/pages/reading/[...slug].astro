@@ -1,0 +1,141 @@
+---
+import { render } from "astro:content";
+import Base from "../../layouts/Base.astro";
+import { entries, fmtDate } from "../../lib";
+
+export async function getStaticPaths() {
+  return (await entries("reading")).map((entry) => ({ params: { slug: entry.id }, props: { entry } }));
+}
+
+const { entry } = Astro.props;
+const { Content } = await render(entry);
+const d = entry.data;
+const bibId = `bib-${entry.id}`;
+const linkDefs = [
+  ["arxiv", "arXiv"],
+  ["pdf", "Original PDF"],
+  ["html", "arXiv HTML"],
+  ["website", "Course Site"],
+] as const;
+const availableLinks = linkDefs.filter(([key]) => d.links[key]);
+---
+<Base title={d.title} description={d.abstract.slice(0, 160)}>
+  <article class="reading-item">
+    <header class="wrap head">
+      <a class="label back" href="/reading/">← <span data-decode>Reading</span></a>
+      <p class="label meta-line">
+        <b>{d.arxivId ?? d.venue}</b>
+        <span> · {d.venue}</span>
+        <span> · {d.year}</span>
+        {d.revised && <span> · Revised {d.revised}</span>}
+      </p>
+      <h1 class="serif" data-reveal>{d.title}</h1>
+      <p class="authors">{d.authors.join(", ")}</p>
+
+      <nav class="links" aria-label="Paper editions and references">
+        {d.readerPath && (
+          <a class="pill primary" href={d.readerPath}>Open HTML Reader →</a>
+        )}
+        {availableLinks.map(([key, label]) => (
+          <a class="pill" href={d.links[key]} target="_blank" rel="noopener">{label} ↗</a>
+        ))}
+        <a class="pill" href="#bibtex">BibTeX ↓</a>
+      </nav>
+    </header>
+
+    <div class="wrap body">
+      <section class="attribution" aria-label="Attribution and license">
+        <div class="attr-row">
+          <span class="label">Original Authors</span>
+          <span class="val">{d.authors.join(" and ")}</span>
+        </div>
+        <div class="attr-row">
+          <span class="label">Source</span>
+          <span class="val">
+            {d.links.arxiv ? (
+              <a class="ulink" href={d.links.arxiv} target="_blank" rel="noopener">{d.arxivId ?? d.links.arxiv} ↗</a>
+            ) : (
+              d.venue
+            )}
+            {d.submitted && <> · Submitted {d.submitted}</>}
+            {d.revised && <> · Last revised {d.revised}</>}
+          </span>
+        </div>
+        <div class="attr-row">
+          <span class="label">License</span>
+          <span class="val">
+            <a class="ulink" href={d.licenseUrl} target="_blank" rel="noopener">{d.license} ↗</a>
+          </span>
+        </div>
+        <div class="attr-row">
+          <span class="label">Archived</span>
+          <span class="val">{fmtDate(d.dateAdded)} · Topic: {d.topic}</span>
+        </div>
+        {d.buildNote && (
+          <div class="attr-row full">
+            <span class="label">How it’s made</span>
+            <span class="val muted">{d.buildNote}</span>
+          </div>
+        )}
+      </section>
+
+      <section class="abstract">
+        <p class="label">Original Abstract</p>
+        <p class="serif">{d.abstract}</p>
+      </section>
+
+      <div class="prose"><Content /></div>
+
+      <section id="bibtex" class="bib">
+        <div class="bib-head">
+          <p class="label">Citation (BibTeX)</p>
+          <button class="pill" data-copy={bibId}>Copy BibTeX</button>
+        </div>
+        <pre id={bibId}>{d.bibtex.trim()}</pre>
+      </section>
+    </div>
+  </article>
+</Base>
+
+<style>
+  .head { padding-top: clamp(130px, 16vw, 210px); display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; padding-bottom: 40px; border-bottom: 1px solid var(--line-2); }
+  .back { width: max-content; }
+  .back:hover { color: var(--paper); }
+  .meta-line { margin: 0; }
+  h1 { margin: 0; font-size: clamp(36px, 6.8vw, 108px); line-height: 0.96; letter-spacing: -0.025em; max-width: 19ch; text-wrap: balance; overflow-wrap: break-word; }
+  .authors { margin: 0; font-size: 19px; color: var(--paper-2); }
+  .links { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+  .pill.primary { background: var(--paper); color: var(--ink); border-color: var(--paper); }
+  .pill.primary:hover { background: var(--hot); color: var(--ink); border-color: var(--hot); }
+
+  .body { margin-top: clamp(48px, 6vw, 84px); display: grid; grid-template-columns: minmax(0, 1fr); gap: 64px; min-width: 0; }
+
+  .attribution {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px 36px;
+    padding: 24px 28px;
+    background: var(--ink-2);
+    border: 1px solid var(--line);
+    border-inline-start: 2px solid var(--cyan);
+  }
+  .attr-row { min-width: 0; display: grid; gap: 6px; align-content: start; }
+  .attr-row.full { grid-column: 1 / -1; padding-top: 14px; border-top: 1px solid var(--line); }
+  .val { font-size: 14.5px; line-height: 1.55; color: var(--paper); overflow-wrap: anywhere; }
+  .val.muted { color: var(--paper-2); }
+
+  .abstract { min-width: 0; display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 20px; }
+  .abstract .serif { margin: 0; font-size: clamp(22px, 2.2vw, 31px); line-height: 1.35; max-width: 42ch; color: var(--paper); }
+
+  .prose { min-width: 0; padding-left: clamp(0px, 14vw, 220px); }
+
+  .bib { min-width: 0; border-top: 1px solid var(--line-2); padding-top: 22px; }
+  .bib-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
+  .bib pre { margin: 0; padding: 22px; background: var(--ink-2); border: 1px solid var(--line); font: 13px/1.6 var(--mono); color: var(--paper-2); overflow-x: auto; }
+
+  @media (max-width: 760px) {
+    .attribution { grid-template-columns: 1fr; padding: 20px; }
+    .abstract { grid-template-columns: 1fr; }
+  }
+</style>

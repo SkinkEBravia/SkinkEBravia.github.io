@@ -1,7 +1,7 @@
 import { getCollection, type CollectionEntry } from "astro:content";
 import { site } from "./site";
 
-type Key = "research" | "writing" | "notes";
+type Key = "research" | "writing" | "notes" | "reading";
 
 /** Published entries; drafts show up in `npm run dev` only. */
 export async function entries<K extends Key>(key: K): Promise<CollectionEntry<K>[]> {
@@ -10,8 +10,10 @@ export async function entries<K extends Key>(key: K): Promise<CollectionEntry<K>
 }
 
 function sortKey(e: CollectionEntry<Key>): number {
-  const d = e.data as { date?: Date; year?: number };
-  return d.date ? d.date.getTime() : new Date(d.year ?? 0, 0).getTime();
+  const d = e.data as { date?: Date; dateAdded?: Date; year?: number };
+  if (d.date) return d.date.getTime();
+  if (d.dateAdded) return d.dateAdded.getTime();
+  return new Date(d.year ?? 0, 0).getTime();
 }
 
 export const fmtDate = (d: Date) =>
@@ -49,6 +51,12 @@ export const noteRows = (es: CollectionEntry<"notes">[]): Row[] =>
   es.map((e) => ({
     href: `/notes/${e.id}/`, slug: e.id, title: e.data.title,
     meta: e.data.topic, aside: fmtDate(e.data.date), kind: "Note",
+  }));
+
+export const readingRows = (es: CollectionEntry<"reading">[]): Row[] =>
+  es.map((e) => ({
+    href: `/reading/${e.id}/`, slug: e.id, title: e.data.title,
+    meta: e.data.shortAuthors, aside: e.data.arxivId ?? String(e.data.year), kind: "Reading",
   }));
 
 const linkTitle = (key: string) => {

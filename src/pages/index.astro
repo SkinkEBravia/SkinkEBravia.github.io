@@ -6,12 +6,13 @@ import SectionHead from "../components/SectionHead.astro";
 import EntryList from "../components/EntryList.astro";
 import Preview from "../components/Preview.astro";
 import { site } from "../site";
-import { entries, researchRows, writingRows, noteRows, resourceRows } from "../lib";
+import { entries, researchRows, writingRows, noteRows, readingRows, resourceRows } from "../lib";
 
 const research = await entries("research");
 const selected = research.filter((r) => r.data.selected);
 const writing = await entries("writing");
 const notes = await entries("notes");
+const reading = await entries("reading");
 const resources = resourceRows();
 ---
 <Base>
@@ -45,6 +46,11 @@ const resources = resourceRows();
   <section class="wrap block">
     <SectionHead n="04" title="Notes" href="/notes/" count={notes.length} />
     <EntryList rows={noteRows(notes.slice(0, 6))} />
+  </section>
+
+  <section class="wrap block">
+    <SectionHead n="05" title="Reading" href="/reading/" count={reading.length} />
+    <EntryList rows={readingRows(reading.slice(0, 5))} empty="Archive empty." />
   </section>
 
   <Preview />
