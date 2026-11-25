@@ -768,6 +768,119 @@
     padding-inline-start: 1rem;
   }
 
+  /* Display equation copy-as-Markdown-LaTeX wrapper & control
+     Touch (hover: none): button stays in flow beside equation so it never covers math.
+     Pointer (hover: hover): subtle overlay revealed on hover / focus-within / feedback. */
+  .sk-eq-wrap {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin: 1.5rem 0;
+    max-width: 100%;
+  }
+
+  .sk-eq-wrap > .ltx_eqn_table {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+  }
+
+  .sk-eq-copy {
+    position: relative;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .sk-copy-btn {
+    display: inline-grid;
+    place-items: center;
+    min-inline-size: 28px;
+    min-block-size: 28px;
+    padding: 4px;
+    color: var(--paper-2);
+    background: color-mix(in oklab, var(--ink-2) 92%, transparent);
+    border: 1px solid var(--line-2);
+    cursor: pointer;
+    transition: opacity 0.18s var(--ease), color 0.18s var(--ease), border-color 0.18s var(--ease), background-color 0.18s var(--ease);
+  }
+
+  .sk-copy-btn .sk-ico-check {
+    display: none;
+  }
+
+  .sk-copy-btn[data-copied] .sk-ico-copy {
+    display: none;
+  }
+
+  .sk-copy-btn[data-copied] .sk-ico-check {
+    display: block;
+  }
+
+  .sk-copy-btn:hover {
+    color: var(--ink);
+    background: var(--paper);
+    border-color: var(--paper);
+  }
+
+  .sk-copy-btn[data-copied] {
+    color: var(--ink);
+    background: var(--cyan);
+    border-color: var(--cyan);
+  }
+
+  .sk-copy-btn[data-failed] {
+    color: var(--ink);
+    background: var(--hot);
+    border-color: var(--hot);
+  }
+
+  .sk-copy-tip {
+    position: absolute;
+    inset-block-end: calc(100% + 6px);
+    inset-inline-end: 0;
+    white-space: nowrap;
+    padding: 4px 8px;
+    font: 500 10px / 1.2 var(--mono);
+    letter-spacing: 0.05em;
+    color: var(--paper);
+    background: var(--ink-3);
+    border: 1px solid var(--line-2);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.18s var(--ease);
+  }
+
+  .sk-copy-btn:is([data-copied], [data-failed]) + .sk-copy-tip {
+    opacity: 1;
+  }
+
+  @media (hover: hover) {
+    .sk-eq-wrap {
+      display: block;
+      position: relative;
+    }
+
+    .sk-eq-copy {
+      position: absolute;
+      inset-block-start: 0.25rem;
+      inset-inline-end: 0;
+      z-index: 2;
+    }
+
+    .sk-copy-btn {
+      opacity: 0;
+    }
+
+    .sk-eq-wrap:hover .sk-copy-btn,
+    .sk-eq-wrap:focus-within .sk-copy-btn,
+    .sk-copy-btn:focus-visible,
+    .sk-copy-btn[data-copied],
+    .sk-copy-btn[data-failed] {
+      opacity: 1;
+    }
+  }
+
   /* Algorithms */
   .ltx_float_algorithm {
     max-width: 76ch;
@@ -1058,7 +1171,7 @@
     body::after {
       display: none;
     }
-    :where(a, .ltx_ref) {
+    :where(a, .ltx_ref, .sk-copy-btn, .sk-copy-tip) {
       transition: none !important;
     }
   }
@@ -1070,7 +1183,9 @@
     .ltx_page_navbar,
     .ltx_theorem,
     .ltx_float_algorithm,
-    .ltx_abstract {
+    .ltx_abstract,
+    .sk-copy-btn,
+    .sk-copy-tip {
       border: 1px solid CanvasText;
     }
     .ltx_page_main a {
